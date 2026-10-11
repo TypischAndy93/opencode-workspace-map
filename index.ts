@@ -161,6 +161,7 @@ export default Plugin.define({
       files: 0,
       outlineSummaries: 0,
       modelSummaries: 0,
+      lspSummaries: 0,
       skippedSummaries: 0,
       lastWalkMs: 0,
       lastInjectionChars: 0,
@@ -546,7 +547,7 @@ export default Plugin.define({
       const summarizeDurationMs = Date.now() - summarizeStartMs
       stats.summaries++
       if (kind === "model") stats.modelSummaries++
-      else if (kind === "lsp") stats.modelSummaries++
+      else if (kind === "lsp") stats.lspSummaries++
       else stats.outlineSummaries++
 
       // Record summarize metrics

@@ -1,0 +1,143 @@
+# Workspace Map Plugin - Implementation Task List
+
+## Priority Matrix
+| Priority | Effort | Impact | Description |
+|----------|--------|--------|-------------|
+| **P0** | Low | High | Quick wins with high value |
+| **P1** | Medium | High | Core architectural improvements |
+| **P2** | Medium | Medium | Performance & reliability |
+| **P3** | High | High | Testing & comprehensive features |
+| **P4** | High | Medium | Nice-to-have enhancements |
+
+---
+
+## ✅ P0 - Quick Wins (Start Here)
+
+### 1. Fix modelSummaries Conflation
+- [ ] Separate `modelSummaries` and `lspSummaries` counters in `Stats` type
+- [ ] Update all increment sites in `index.ts` and `cli/index.ts`
+- [ ] Update cost tracking to distinguish model vs LSP
+
+### 2. Structured JSON Logging
+- [ ] Add `logJson(level, message, meta)` helper
+- [ ] Replace `console.error` calls with structured logging when `opts.debug`
+- [ ] Add `--log-format=json` CLI option
+
+### 3. Config Wizard CLI Command
+- [ ] Add `workspace-map:init` command
+- [ ] Interactive prompts for key options
+- [ ] Write `.opencode/workspace-map.json` sidecar config
+
+---
+
+## 🏗️ P1 - Core Architecture (High Impact)
+
+### 4. Split index.ts into Modules
+- [ ] `src/setup.ts` - Plugin initialization, option merging, validation
+- [ ] `src/injection-engine.ts` - `getInjection`, `listFiles`, tree caching
+- [ ] `src/summarization-engine.ts` - `summarize`, `summarizeMany`, fallback chains
+- [ ] `src/session-manager.ts` - Session tracking, recent files, injection state
+- [ ] `src/vcs-integration.ts` - Changed files, git detection
+- [ ] `src/hooks.ts` - Tool hooks (`refreshOnWrite`, `session.context`)
+- [ ] Update `index.ts` to compose modules
+
+### 5. PluginContext for Parameter Drilling
+- [ ] Define `PluginContext` interface with all shared state
+- [ ] Refactor `createWorkspaceMapTool`, `registerCLICommands`, `buildFullMapping` to accept `ctx: PluginContext`
+- [ ] Remove 10+ parameter lists
+
+### 6. Priority Queue for Summarization
+- [ ] Create `PriorityQueue` class with priority levels (changed > recent > warmup > background)
+- [ ] Integrate into `summarizeMany`
+- [ ] Add `priority` field to summarization jobs
+
+---
+
+## ⚡ P2 - Performance & Reliability
+
+### 7. LSP Response Caching
+- [ ] Add `lspCache: Map<string, { symbols, imports, at }>` in summarization engine
+- [ ] Cache key: file path + mtime + size
+- [ ] TTL configurable via `opts.lspCacheTtlMs`
+
+### 8. Batch Storage Writes
+- [ ] Accumulate pending cache writes in memory
+- [ ] Flush interval via `opts.cacheFlushIntervalMs` (default 5s)
+- [ ] Flush on shutdown
+
+### 9. Adaptive Walk Concurrency
+- [ ] Monitor walk duration vs file count
+- [ ] Increase/decrease `walkConcurrency` dynamically
+- [ ] Expose metrics for tuning
+
+### 10. Generated File Heuristics
+- [ ] Detect minified files (single line > 500 chars)
+- [ ] Detect license headers (SPDX, MIT, Apache)
+- [ ] Detect build outputs via `package.json` `outDir`/`dist`
+
+---
+
+## 🧪 P3 - Testing & Comprehensive Features
+
+### 11. Unit Test Suite
+- [ ] `globToRegex`, `compileGitignore`, `detectProject`, `autoTuneOptions`
+- [ ] `buildInjectionRev`, `renderTree`, `renderJson`
+- [ ] Cache invalidation, tree mutations, reverse deps consistency
+
+### 12. Integration Tests
+- [ ] Full walk → summarize → inject cycle
+- [ ] Monorepo with multiple packages
+- [ ] Watch mode file changes
+
+### 13. Symbol Navigation
+- [ ] `action: "symbols"` - list all symbols matching query
+- [ ] `action: "definition"` - find definition (requires LSP)
+- [ ] `action: "references"` - find references (requires LSP)
+
+### 14. Dependency Graph Enhancements
+- [ ] Circular dependency detection
+- [ ] Fan-in/fan-out metrics per file
+- [ ] Architectural layers (group by directory depth)
+
+---
+
+## 🎯 P4 - Nice to Have
+
+### 15. More Language Summarizers
+- [ ] Dart/Flutter
+- [ ] C# (Roslyn)
+- [ ] Swift (SwiftSyntax)
+- [ ] Rust (syn)
+
+### 16. Daemon Watch Mode
+- [ ] `--daemon` flag for `workspace-map:watch`
+- [ ] `--pid-file` for process management
+- [ ] Pause during agent execution
+
+### 17. Health Check & Profiling
+- [ ] `action: "health"` tool endpoint
+- [ ] `workspace-map:profile` command (CPU/memory)
+- [ ] OpenTelemetry metrics export config
+
+---
+
+## 📋 Current Sprint (Start with these)
+
+| # | Task | Estimate | Status |
+|---|------|----------|--------|
+| 1 | Fix modelSummaries conflation | 30 min | ⬜ Todo |
+| 2 | Structured JSON logging | 1 hour | ⬜ Todo |
+| 3 | Config wizard CLI | 1.5 hours | ⬜ Todo |
+| 4 | Split index.ts modules | 3 hours | ⬜ Todo |
+| 5 | PluginContext for parameter drilling | 2 hours | ⬜ Todo |
+| 6 | Priority queue for summarization | 2 hours | ⬜ Todo |
+
+**Total estimated: ~10 hours**
+
+---
+
+## Notes
+- Tasks are ordered by dependencies (e.g., split modules before PluginContext)
+- Each task should be committed separately with clear messages
+- Run `npm run build` (or equivalent) after each task to verify
+- Update this file as tasks are completed

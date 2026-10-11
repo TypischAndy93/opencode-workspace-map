@@ -73,6 +73,7 @@ export interface Stats {
   files: number
   outlineSummaries: number
   modelSummaries: number
+  lspSummaries: number
   skippedSummaries: number
   lastWalkMs: number
   lastInjectionChars: number

@@ -357,7 +357,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         const totalSummaries = stats.summaries
         const outlineSummaries = stats.outlineSummaries
         const modelSummaries = stats.modelSummaries
-        const lspSummaries = stats.modelSummaries // tracked together
+        const lspSummaries = stats.lspSummaries
         const skippedSummaries = stats.skippedSummaries
         const walks = stats.walks
         const fullInjections = stats.fullInjections
