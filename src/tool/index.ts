@@ -1,27 +1,12 @@
-import type { Options, FileEntry, Stats, WorkspaceMapInput, ProjectInfo } from "../config/index.ts"
-import type { Context } from "@opencode/plugin/promise/plugin"
+import type { Options, FileEntry, Stats, WorkspaceMapInput, ProjectInfo, PluginContext, MonorepoPackage, SymbolInfo } from "../config/index.ts"
 import { TOOL_NAME } from "../config/index.ts"
 import { renderTree, renderReverseDeps } from "../injection/render.ts"
 import { promises as fs } from "node:fs"
 import { createWriteStream } from "node:fs"
 import * as path from "node:path"
 
-export function createWorkspaceMapTool(
-  api: Context,
-  opts: Options,
-  root: string,
-  locKey: string,
-  cache: Map<string, FileEntry>,
-  reverseDeps: Map<string, Set<string>>,
-  stats: Stats,
-  recentBySession: Map<string, Map<string, number>>,
-  recentGlobal: Map<string, number>,
-  listFiles: (force: boolean) => Promise<string[]>,
-  getChangedFiles: () => Promise<string[]>,
-  summarizeMany: (rels: string[], force: boolean) => Promise<void>,
-  log: (...args: unknown[]) => void,
-  project: ProjectInfo
-) {
+export function createWorkspaceMapTool(pluginCtx: PluginContext) {
+  const { api, opts, root, locKey, cache, reverseDeps, stats, recentBySession, recentGlobal, listFiles, getChangedFilesCached, summarizeMany, project } = pluginCtx
   return {
     name: TOOL_NAME,
     description:
@@ -47,7 +32,7 @@ export function createWorkspaceMapTool(
           stats.sessions = recentBySession.size
           return {
             content: JSON.stringify(
-              { version: "0.4.0", root, broadRoot: false, locationKey: locKey, cachedEntries: cache.size, ...stats, monorepo: project.isMonorepo ? { type: project.monorepoType, packages: project.packages.map(p => ({ name: p.name, path: p.path, language: p.language })) } : null },
+              { version: "0.4.0", root, broadRoot: false, locationKey: locKey, cachedEntries: cache.size, ...stats, monorepo: project.isMonorepo ? { type: project.monorepoType, packages: project.packages.map((p: MonorepoPackage) => ({ name: p.name, path: p.path, language: p.language })) } : null },
               null,
               2,
             ),
@@ -60,7 +45,7 @@ export function createWorkspaceMapTool(
           }
           return {
             content: JSON.stringify(
-              { packages: project.packages.map(p => ({ name: p.name, path: p.path, language: p.language, packageJson: p.packageJson })) },
+              { packages: project.packages.map((p: MonorepoPackage) => ({ name: p.name, path: p.path, language: p.language, packageJson: p.packageJson })) },
               null,
               2,
             ),
@@ -71,11 +56,11 @@ export function createWorkspaceMapTool(
         let matched = files
         if (input?.path) {
           const rel = toRel(String(input.path), root)
-          if (rel) matched = matched.filter((f) => f === rel || f.startsWith(rel.replace(/\/$/, "") + "/"))
+          if (rel) matched = matched.filter((f: string) => f === rel || f.startsWith(rel.replace(/\/$/, "") + "/"))
         }
         const query = typeof input?.query === "string" ? input.query.toLowerCase() : undefined
         if (query) {
-          matched = matched.filter((f) => {
+          matched = matched.filter((f: string) => {
             const entry = cache.get(f)
             const summary = entry?.summary ?? ""
             const symbols = entry?.symbols?.join(" ") ?? ""
@@ -133,7 +118,7 @@ export function createWorkspaceMapTool(
         }
         
         if (input?.format === "json") {
-          const changed = await getChangedFiles()
+          const changed = await getChangedFilesCached()
           const notes: Record<string, any> = {}
           for (const rel of shown) {
             const e = cache.get(rel)
@@ -143,7 +128,7 @@ export function createWorkspaceMapTool(
           }
           return {
             content: JSON.stringify(
-              { version: "0.4.0", root, broadRoot: false, locationKey: locKey, total: matched.length, changed, files: shown, notes, stats: { ...stats, sessions: recentBySession.size }, monorepo: project.isMonorepo ? { type: project.monorepoType, packages: project.packages.map(p => ({ name: p.name, path: p.path, language: p.language })) } : null },
+              { version: "0.4.0", root, broadRoot: false, locationKey: locKey, total: matched.length, changed, files: shown, notes, stats: { ...stats, sessions: recentBySession.size }, monorepo: project.isMonorepo ? { type: project.monorepoType, packages: project.packages.map((p: MonorepoPackage) => ({ name: p.name, path: p.path, language: p.language })) } : null },
               null,
               2,
             ),
@@ -164,7 +149,7 @@ export function createWorkspaceMapTool(
             out.push(e?.summary ?? "(not indexed yet — pass refresh: true)")
             if (e?.imports?.length) out.push(`Imports: ${e.imports.join(", ")}`)
             if (e?.symbols?.length) {
-              const symStr = e.symbols.map(s => typeof s === "string" ? s : (s.kind ? `${s.name}:${s.kind}` : s.name)).join(", ")
+              const symStr = e.symbols.map((s: SymbolInfo) => typeof s === "string" ? s : (s.kind ? `${s.name}:${s.kind}` : s.name)).join(", ")
               out.push(`Symbols: ${symStr}`)
             }
             // Structured sections
@@ -172,7 +157,7 @@ export function createWorkspaceMapTool(
               const s = e.sections
               if (s.purpose) out.push(`**Purpose:** ${s.purpose}`)
               if (s.keyExports?.length) {
-                const expStr = s.keyExports.map(se => se.kind ? `${se.name}:${se.kind}` : se.name).join(", ")
+                const expStr = s.keyExports.map((se: SymbolInfo) => se.kind ? `${se.name}:${se.kind}` : se.name).join(", ")
                 out.push(`**Key Exports:** ${expStr}`)
               }
               if (s.dependencies?.length) out.push(`**Dependencies:** ${s.dependencies.join(", ")}`)
@@ -185,6 +170,7 @@ export function createWorkspaceMapTool(
         }
         return { content: out.join("\n") }
       } catch (err) {
+        const log = (...args: unknown[]) => { if (opts.debug) console.error("[workspace-map]", ...args) }
         log("tool execute error", err)
         const msg = err instanceof Error ? err.message : String(err)
         return { content: `workspace_map error: ${msg}`, isError: true }

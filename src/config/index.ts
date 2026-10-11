@@ -110,6 +110,8 @@ export { GENERIC_CODE_SYMBOL_RULES } from "../summarizers/languages/generic.ts"
 
 export { entryPrefix, LEGACY_PREFIX, locKey } from "../utils/hash.ts"
 
+export type { PluginContext } from "../setup.ts"
+
 export function familyOf(ext: string): "js" | "py" | "go" | "rust" | "jvm" | "code" | "data" | "other" {
   if (["ts", "tsx", "js", "jsx", "mjs", "cjs", "vue", "svelte"].includes(ext)) return "js"
   if (ext === "py") return "py"

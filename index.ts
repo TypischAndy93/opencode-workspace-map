@@ -98,6 +98,11 @@ export default Plugin.define({
       { current: dirty }
     )
 
+    // Set the PluginContext functions now that engines are created
+    pluginCtx.listFiles = injectionEngine.listFiles
+    pluginCtx.getChangedFilesCached = injectionEngine.getChangedFilesCached
+    pluginCtx.summarizeMany = summarizationEngine.summarizeMany
+
     const vcsIntegration = createVCSIntegration(
       pluginCtx.api,
       pluginCtx.root,
@@ -131,22 +136,7 @@ export default Plugin.define({
       console.error(regMsg)
       ;(async () => { try { await fs.appendFile(path.join(os.tmpdir(), "wm-setup.log"), regMsg + "\n") } catch {} })()
       await pluginCtx.api.tool.transform((editor: any) => {
-        editor.add(createWorkspaceMapTool(
-          pluginCtx.api,
-          pluginCtx.opts,
-          pluginCtx.root,
-          pluginCtx.locKey,
-          pluginCtx.cache,
-          pluginCtx.reverseDeps,
-          pluginCtx.stats,
-          pluginCtx.recentBySession,
-          pluginCtx.recentGlobal,
-          injectionEngine.listFiles,
-          injectionEngine.getChangedFilesCached,
-          summarizationEngine.summarizeMany,
-          logFn,
-          pluginCtx.project
-        ))
+        editor.add(createWorkspaceMapTool(pluginCtx))
       })
     }
 

@@ -124,6 +124,7 @@ export interface Options {
   exportJsonlPath?: string
   lspTimeoutMs: number
   lspMaxSymbols: number
+  lspCacheTtlMs?: number
   indexDotDirs?: string[]
   watchEnabled?: boolean
   watch?: {
@@ -156,6 +157,8 @@ export interface Options {
     outputTokenPriceUsd?: number
     logIntervalMs?: number
   }
+  // Batch storage writes
+  cacheFlushIntervalMs?: number
 }
 
 export interface ProjectInfo {
@@ -293,6 +296,7 @@ export const DEFAULT_OPTIONS: Options = {
   exportJsonl: false,
   lspTimeoutMs: 10_000,
   lspMaxSymbols: 500,
+  lspCacheTtlMs: 300_000,
   watchEnabled: true,
   includeReverseDeps: true,
   injectionFormat: "markdown",
@@ -322,6 +326,8 @@ export const DEFAULT_OPTIONS: Options = {
     exporter: "console",
     intervalMs: 30_000,
   },
+  // Batch storage writes
+  cacheFlushIntervalMs: 5000,
   // Watch mode configuration
   watch: {
     debounceMs: 500,

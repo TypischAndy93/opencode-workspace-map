@@ -46,6 +46,9 @@ export interface PluginContext {
   project: ProjectInfo
   metricsCollector: ReturnType<typeof getMetricsCollector> | null
   filterCtx: ReturnType<typeof createFilterContext>
+  listFiles: (force: boolean) => Promise<string[]>
+  getChangedFilesCached: () => Promise<string[]>
+  summarizeMany: (rels: string[], force: boolean) => Promise<void>
 }
 
 export async function initializePlugin(api: Context): Promise<{ ctx: PluginContext; cleanup: Cleanup }> {
@@ -211,6 +214,10 @@ export async function initializePlugin(api: Context): Promise<{ ctx: PluginConte
     project,
     metricsCollector,
     filterCtx,
+    // These will be set after engines are created in index.ts
+    listFiles: async () => { throw new Error("listFiles not initialized") },
+    getChangedFilesCached: async () => { throw new Error("getChangedFilesCached not initialized") },
+    summarizeMany: async () => { throw new Error("summarizeMany not initialized") },
   }
 
   if (!opts.enabled) {
