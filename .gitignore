@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Cache
+.opencode/
+.cache/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Test outputs
+coverage/
+.nyc_output/
+
+# Benchmarks
+benchmarks/results/
+
+# Package manager
+bun.lock
+package-lock.json
+pnpm-lock.yaml
+yarn.lock

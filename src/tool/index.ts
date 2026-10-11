@@ -1,0 +1,260 @@
+import type { Options, FileEntry, Stats, WorkspaceMapInput, ProjectInfo } from "../config/index.ts"
+import type { Context } from "@opencode/plugin/promise/plugin"
+import { TOOL_NAME } from "../config/index.ts"
+import { renderTree, renderReverseDeps } from "../injection/render.ts"
+import { promises as fs } from "node:fs"
+import { createWriteStream } from "node:fs"
+import * as path from "node:path"
+
+export function createWorkspaceMapTool(
+  api: Context,
+  opts: Options,
+  root: string,
+  locKey: string,
+  cache: Map<string, FileEntry>,
+  reverseDeps: Map<string, Set<string>>,
+  stats: Stats,
+  recentBySession: Map<string, Map<string, number>>,
+  recentGlobal: Map<string, number>,
+  listFiles: (force: boolean) => Promise<string[]>,
+  getChangedFiles: () => Promise<string[]>,
+  summarizeMany: (rels: string[], force: boolean) => Promise<void>,
+  log: (...args: unknown[]) => void,
+  project: ProjectInfo
+) {
+  return {
+    name: TOOL_NAME,
+    description:
+      "CODE MODE TOOL — use via: await tools.workspace_map({ path, query, refresh, limit, format, action }) inside an execute block. " +
+      "NOT a direct assistant tool. Returns workspace tree + per-file summaries (outline default, zero model cost). " +
+      "Accepts: path (limit to dir/file), query (filter by path, summary, or symbols), limit (cap), format (map|json), refresh (re-scan), action (map|stats|export).",
+    input: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Limit results to this file or directory, relative to the workspace root." },
+        query: { type: "string", description: "Only include files whose path, summary, or symbols contain this text." },
+        refresh: { type: "boolean", description: "Force a fresh filesystem scan and re-summarize the matching files." },
+        limit: { type: "number", description: "Cap the number of matching files returned (and summarized on refresh)." },
+        format: { type: "string", enum: ["map", "json"], description: "Return the rendered map (default) or raw JSON." },
+        action: { type: "string", enum: ["map", "stats", "export", "graph", "packages"], description: "Return the map (default), plugin statistics, export JSONL, dependency graph, or monorepo packages." },
+      },
+      additionalProperties: false,
+    },
+    execute: async (input: WorkspaceMapInput, context: { progress?: (update: { status: string }) => Promise<void> } | undefined) => {
+      try {
+        await context?.progress?.({ status: "building workspace map" })
+        if (input?.action === "stats") {
+          stats.sessions = recentBySession.size
+          return {
+            content: JSON.stringify(
+              { version: "0.4.0", root, broadRoot: false, locationKey: locKey, cachedEntries: cache.size, ...stats, monorepo: project.isMonorepo ? { type: project.monorepoType, packages: project.packages.map(p => ({ name: p.name, path: p.path, language: p.language })) } : null },
+              null,
+              2,
+            ),
+          }
+        }
+        
+        if (input?.action === "packages") {
+          if (!project.isMonorepo) {
+            return { content: "Not a monorepo" }
+          }
+          return {
+            content: JSON.stringify(
+              { packages: project.packages.map(p => ({ name: p.name, path: p.path, language: p.language, packageJson: p.packageJson })) },
+              null,
+              2,
+            ),
+          }
+        }
+        const force = input?.refresh === true
+        const files = await listFiles(force)
+        let matched = files
+        if (input?.path) {
+          const rel = toRel(String(input.path), root)
+          if (rel) matched = matched.filter((f) => f === rel || f.startsWith(rel.replace(/\/$/, "") + "/"))
+        }
+        const query = typeof input?.query === "string" ? input.query.toLowerCase() : undefined
+        if (query) {
+          matched = matched.filter((f) => {
+            const entry = cache.get(f)
+            const summary = entry?.summary ?? ""
+            const symbols = entry?.symbols?.join(" ") ?? ""
+            return f.toLowerCase().includes(query) ||
+              summary.toLowerCase().includes(query) ||
+              symbols.toLowerCase().includes(query)
+          })
+        }
+        const limit = typeof input?.limit === "number" && input.limit > 0 ? Math.floor(input.limit) : undefined
+        if (limit) matched = matched.slice(0, limit)
+        const shown = matched.slice(0, opts.maxSummaries)
+        if (force) {
+          const toSum = matched.slice(0, 2000)
+          await summarizeMany(toSum, false)
+        }
+        if (input?.action === "export") {
+          const exportPath = opts.exportJsonlPath || ".opencode/workspace-map.jsonl"
+          const absExportPath = path.isAbsolute(exportPath) ? exportPath : path.join(root, exportPath)
+          await fs.mkdir(path.dirname(absExportPath), { recursive: true })
+          
+          const files = await listFiles(false)
+          const writeStream = createWriteStream(absExportPath)
+          let count = 0
+          
+          for (const rel of files) {
+            const e = cache.get(rel)
+            if (e) {
+              const line = JSON.stringify({
+                rel: e.rel,
+                summary: e.summary,
+                symbols: e.symbols,
+                imports: e.imports,
+                size: e.size,
+                mtimeMs: e.mtimeMs,
+                kind: e.kind,
+                updatedAt: e.updatedAt,
+              })
+              writeStream.write(line + "\n")
+              count++
+            }
+          }
+          
+          await new Promise<void>((resolve, reject) => {
+            writeStream.end()
+            writeStream.on("finish", () => resolve())
+            writeStream.on("error", reject)
+          })
+          
+          return { content: `Exported ${count} file summaries to ${exportPath}` }
+        }
+        
+        if (input?.action === "graph") {
+          const depGraph = buildDependencyGraph(cache, reverseDeps, matched)
+          return { content: JSON.stringify(depGraph, null, 2) }
+        }
+        
+        if (input?.format === "json") {
+          const changed = await getChangedFiles()
+          const notes: Record<string, any> = {}
+          for (const rel of shown) {
+            const e = cache.get(rel)
+            notes[rel] = e
+              ? { summary: e.summary, symbols: e.symbols, imports: e.imports, size: e.size, updatedAt: e.updatedAt, importedBy: reverseDeps.get(rel) ? [...reverseDeps.get(rel)!] : [] }
+              : { summary: null }
+          }
+          return {
+            content: JSON.stringify(
+              { version: "0.4.0", root, broadRoot: false, locationKey: locKey, total: matched.length, changed, files: shown, notes, stats: { ...stats, sessions: recentBySession.size }, monorepo: project.isMonorepo ? { type: project.monorepoType, packages: project.packages.map(p => ({ name: p.name, path: p.path, language: p.language })) } : null },
+              null,
+              2,
+            ),
+          }
+        }
+        const out: string[] = [
+          `# Workspace map (v0.4.0)`,
+          `Root: ${root}`,
+          `${matched.length} matching file${matched.length === 1 ? "" : "s"}`,
+          "",
+          renderTree(matched, opts, false),
+        ]
+        if (shown.length) {
+          out.push("", "## File notes")
+          for (const rel of shown) {
+            const e = cache.get(rel)
+            out.push(`### ${rel}`)
+            out.push(e?.summary ?? "(not indexed yet — pass refresh: true)")
+            if (e?.imports?.length) out.push(`Imports: ${e.imports.join(", ")}`)
+            if (e?.symbols?.length) {
+              const symStr = e.symbols.map(s => typeof s === "string" ? s : (s.kind ? `${s.name}:${s.kind}` : s.name)).join(", ")
+              out.push(`Symbols: ${symStr}`)
+            }
+            // Structured sections
+            if (e?.sections) {
+              const s = e.sections
+              if (s.purpose) out.push(`**Purpose:** ${s.purpose}`)
+              if (s.keyExports?.length) {
+                const expStr = s.keyExports.map(se => se.kind ? `${se.name}:${se.kind}` : se.name).join(", ")
+                out.push(`**Key Exports:** ${expStr}`)
+              }
+              if (s.dependencies?.length) out.push(`**Dependencies:** ${s.dependencies.join(", ")}`)
+              if (s.todos?.length) out.push(`**TODOs:** ${s.todos.join("; ")}`)
+            }
+            const importedBy = reverseDeps.get(rel)
+            if (importedBy?.size) out.push(`Imported by: ${[...importedBy].join(", ")}`)
+            out.push("")
+          }
+        }
+        return { content: out.join("\n") }
+      } catch (err) {
+        log("tool execute error", err)
+        const msg = err instanceof Error ? err.message : String(err)
+        return { content: `workspace_map error: ${msg}`, isError: true }
+      }
+    },
+  }
+}
+
+function toRel(input: string, root: string): string | undefined {
+  if (typeof input !== "string" || !input.trim()) return undefined
+  const abs = path.isAbsolute(input) ? input : path.resolve(root, input)
+  const rel = path.relative(root, abs)
+  if (!rel || rel.startsWith("..")) return undefined
+  return rel.split(path.sep).join("/")
+}
+
+function buildDependencyGraph(cache: Map<string, FileEntry>, reverseDeps: Map<string, Set<string>>, files: string[]): {
+  nodes: Array<{ id: string; imports: string[]; importedBy: string[] }>;
+  edges: Array<{ from: string; to: string }>;
+} {
+  const nodes = new Map<string, { id: string; imports: string[]; importedBy: string[] }>()
+  const edges: Array<{ from: string; to: string }> = []
+
+  for (const rel of files) {
+    const entry = cache.get(rel)
+    if (!entry) continue
+    const importedBy = reverseDeps.get(rel) ? [...reverseDeps.get(rel)!] : []
+    nodes.set(rel, { id: rel, imports: entry.imports ?? [], importedBy })
+  }
+
+  // Build edges from imports
+  for (const [rel, entry] of nodes) {
+    for (const imp of entry.imports) {
+      // Try to resolve the import to a file in our workspace
+      const resolved = resolveImport(imp, rel, nodes)
+      if (resolved) {
+        edges.push({ from: rel, to: resolved })
+      }
+    }
+  }
+
+  return {
+    nodes: [...nodes.values()],
+    edges,
+  }
+}
+
+function resolveImport(imp: string, fromFile: string, nodes: Map<string, any>): string | null {
+  // Handle relative imports
+  if (imp.startsWith(".") || imp.startsWith("/")) {
+    const dir = path.dirname(fromFile)
+    let resolved = path.resolve(dir, imp)
+    // Add extension if missing
+    if (!path.extname(resolved)) {
+      for (const ext of [".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs"]) {
+        if (nodes.has(resolved + ext)) return resolved + ext
+      }
+      if (nodes.has(resolved)) return resolved
+    }
+    if (nodes.has(resolved)) return resolved
+    // Try with index
+    for (const ext of [".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs"]) {
+      const withIndex = path.join(resolved, "index" + ext)
+      if (nodes.has(withIndex)) return withIndex
+    }
+  }
+  // For absolute imports (node_modules, etc.), check if we have a matching file
+  // This is a best-effort approach
+  for (const [nodePath] of nodes) {
+    if (nodePath.endsWith(imp) || nodePath === imp) return nodePath
+  }
+  return null
+}

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "workspace-map-config",
+  "title": "workspace-map options",
+  "description": "Options for the workspace-map plugin (sidecar config.json or the plugins entry in opencode.json).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": { "type": "boolean", "default": true, "description": "Master switch." },
+    "inject": {
+      "type": "string",
+      "enum": ["off", "tree", "changed", "full"],
+      "default": "changed",
+      "description": "How much to inject into the session context."
+    },
+    "injectStrategy": {
+      "type": "string",
+      "enum": ["first", "changed", "always"],
+      "default": "changed",
+      "description": "first = full once per session; changed = full when the map changes else digest; always = full every request."
+    },
+    "summarizer": {
+      "type": "string",
+      "enum": ["outline", "model", "lsp"],
+      "default": "outline",
+      "description": "outline = deterministic, zero model cost; model = prose via ctx.generate.text (background, never blocks the hook); lsp = LSP-backed symbols (uses ctx.lsp, zero model cost)."
+    },
+    "summaryModel": {
+      "type": "object",
+      "required": ["providerID", "id"],
+      "properties": {
+        "providerID": { "type": "string" },
+        "id": { "type": "string" },
+        "variant": { "type": "string" }
+      },
+      "additionalProperties": false,
+      "description": "Model ref for summarizer: 'model'; defaults to the session default model."
+    },
+    "registerTool": { "type": "boolean", "default": true },
+    "refreshOnWrite": { "type": "boolean", "default": true, "description": "Re-summarize files changed by write/edit tools." },
+    "respectGitignore": { "type": "boolean", "default": true, "description": "Honor the root .gitignore." },
+    "allowBroadRoot": { "type": "boolean", "default": false, "description": "Allow warmup/injection for home/filesystem roots." },
+    "debounceMs": { "type": "integer", "minimum": 0, "default": 750 },
+    "treeTtlMs": { "type": "integer", "minimum": 1, "default": 15000 },
+    "treeDepth": { "type": "integer", "minimum": 1, "default": 5 },
+    "maxTreeEntries": { "type": "integer", "minimum": 1, "default": 400 },
+    "maxInjectedChars": { "type": "integer", "minimum": 1, "default": 12000 },
+    "maxSummaries": { "type": "integer", "minimum": 0, "default": 40 },
+    "maxFiles": { "type": "integer", "minimum": 1, "default": 4000 },
+    "maxFileBytes": { "type": "integer", "minimum": 1, "default": 524288 },
+    "maxFileBytesByExt": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 }, "default": {}, "description": "Per-extension max file size overrides (e.g., {\".min.js\": 2097152})." },
+    "summaryLengthByExt": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 50 }, "default": { "ts": 500, "tsx": 500, "js": 500, "jsx": 500, "py": 500, "go": 600, "rs": 600, "java": 600, "kt": 600, "cs": 600, "c": 500, "cpp": 500, "h": 300, "hpp": 300, "rb": 500, "php": 500, "swift": 500, "dart": 500, "lua": 400, "sh": 400, "bash": 400, "zsh": 400, "ps1": 400, "sql": 400, "md": 2000, "mdx": 2000, "json": 300, "yaml": 300, "yml": 300, "toml": 300 }, "description": "Per-extension summary length limits in characters (e.g., {\"ts\": 500, \"md\": 2000})." },
+    "warmupSummaries": { "type": "integer", "minimum": 0, "default": 25 },
+    "ignore": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Extra directory/file names or glob patterns to skip at any depth." },
+    "ignoreExtra": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Additional directory/file names or glob patterns to skip at any depth." },
+    "include": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Glob patterns to force-include files that would otherwise be skipped." },
+    "debug": { "type": "boolean", "default": false, "description": "Log to stderr." },
+    "walkConcurrency": { "type": ["integer", "string"], "minimum": 1, "enum": [1, 2, 4, 8, 16, "auto"], "default": "auto", "description": "Max concurrent directory walks. 'auto' detects optimal value based on filesystem latency." },
+    "summarizeConcurrency": { "type": "integer", "minimum": 1, "default": 4, "description": "Max concurrent file summarizations." },
+    "summaryLength": { "type": "string", "enum": ["short", "medium", "long"], "default": "medium", "description": "Model summary length: short (1 sentence), medium (2-3 sentences), long (4-5 sentences)." },
+    "autoTune": { "type": "boolean", "default": true, "description": "Auto-detect project type and tune options (monorepo, language, framework)." },
+    "exportJsonl": { "type": "boolean", "default": false, "description": "Enable JSONL export of summaries via workspace_map tool (action: export)." },
+    "exportJsonlPath": { "type": "string", "default": ".opencode/workspace-map.jsonl", "description": "Output path for JSONL export (relative to workspace root)." },
+    "lspTimeoutMs": { "type": "integer", "minimum": 100, "default": 5000, "description": "LSP request timeout in milliseconds." },
+    "lspMaxSymbols": { "type": "integer", "minimum": 1, "default": 50, "description": "Max symbols to fetch from LSP per file." },
+    "indexDotDirs": { "type": "array", "items": { "type": "string" }, "default": [".github", ".opencode", ".vscode", ".devcontainer", ".gitlab"], "description": "Dot-directories to index (override allowlist)." },
+    "watchEnabled": { "type": "boolean", "default": false, "description": "Enable fs.watch-based real-time updates (complements refreshOnWrite)." },
+    "includeReverseDeps": { "type": "boolean", "default": true, "description": "Build and include reverse dependency index (which files import each file)." },
+    "injectionFormat": { "type": "string", "enum": ["markdown", "json", "both"], "default": "markdown", "description": "Format for context injection output." },
+    "summarizerPreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "preferLspFor": { "type": "array", "items": { "type": "string" }, "default": [], "description": "File extensions (without dot) where LSP summarizer is preferred over global setting." },
+        "fallbackChain": { "type": "array", "items": { "type": "string", "enum": ["outline", "model", "lsp"] }, "default": ["lsp", "outline", "model"], "description": "Fallback order when preferred summarizer fails." },
+        "perLanguage": { "type": "object", "additionalProperties": { "type": "string", "enum": ["outline", "model", "lsp"] }, "default": {}, "description": "Explicit summarizer per extension (e.g., { \"py\": \"lsp\", \"md\": \"outline\" })." },
+        "lspFallbackOnTimeout": { "type": "boolean", "default": true, "description": "Fall back to next summarizer in chain when LSP times out." },
+        "lspFallbackOnError": { "type": "boolean", "default": true, "description": "Fall back to next summarizer in chain when LSP returns an error." }
+      },
+      "description": "Per-language summarizer preferences. When configured, overrides the global 'summarizer' for matching extensions."
+    },
+    "followSymlinks": { "type": "boolean", "default": false, "description": "Follow symlinks when walking directories." },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false, "description": "Enable OpenTelemetry metrics collection." },
+        "exporter": { "type": "string", "enum": ["console", "otlp"], "default": "console", "description": "Metrics exporter type." },
+        "intervalMs": { "type": "integer", "minimum": 1000, "default": 60000, "description": "Metrics export interval in milliseconds." }
+      },
+      "description": "OpenTelemetry metrics configuration for observability."
+    },
+    "watch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "debounceMs": { "type": "integer", "minimum": 0, "default": 500, "description": "Debounce time for file change events in milliseconds." },
+        "batchChanges": { "type": "boolean", "default": true, "description": "Batch multiple file changes before re-summarizing." },
+        "batchTimeoutMs": { "type": "integer", "minimum": 10, "default": 100, "description": "Maximum time to wait for batching changes in milliseconds." }
+      },
+      "description": "Watch mode configuration for real-time file updates."
+    },
+    "autoDetectGenerated": { "type": "boolean", "default": true, "description": "Automatically detect and skip generated files during summarization." },
+    "generatedPatterns": { "type": "array", "items": { "type": "string" }, "default": ["*.generated.*", "*.d.ts", "dist", "dist/**/*", "build", "build/**/*", "out", "out/**/*", "*.min.js", "*.min.css", "coverage", "coverage/**/*", ".next", ".next/**/*", ".nuxt", ".nuxt/**/*", ".output", ".output/**/*", "target", "target/**/*", "obj", "obj/**/*", "*.g.dart", "GeneratedPluginRegistrant.*", "*.pb.go", "*.pb.ts", "*.pb.js", "*_generated.*", "generated_*.*", "*.designer.*", "*.autogenerated.*"], "description": "Glob patterns for generated files to skip summarization. Used when autoDetectGenerated is true." }
+  }
+}

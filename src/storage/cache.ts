@@ -1,0 +1,190 @@
+import type { FileEntry, Options, Stats } from "../config/index.ts"
+import { computeCacheVersion } from "../config/index.ts"
+import type { Context } from "@opencode/plugin/promise/plugin"
+import { entryPrefix as ENTRY_PREFIX, LEGACY_PREFIX, REFRESH_CAP, TOOL_NAME } from "../config/index.ts"
+import { run as zstdRun } from "zstd-codec/lib/zstd-codec.js"
+
+const COMPRESSION_THRESHOLD = 1024 // 1KB
+
+async function compressData(data: Uint8Array): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    zstdRun((zstd) => {
+      try {
+        const simple = new zstd.Simple()
+        const compressed = simple.compress(data, 3)
+        resolve(compressed)
+      } catch (err) {
+        reject(err)
+      }
+    })
+  })
+}
+
+async function decompressData(data: Uint8Array): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    zstdRun((zstd) => {
+      try {
+        const simple = new zstd.Simple()
+        const decompressed = simple.decompress(data)
+        resolve(decompressed)
+      } catch (err) {
+        reject(err)
+      }
+    })
+  })
+}
+
+export async function loadCache(
+  api: Context,
+  locKey: string,
+  cache: Map<string, FileEntry>,
+  log: (...args: unknown[]) => void
+): Promise<void> {
+  const prefix = `loc/${locKey}/file/`
+  let after: string | undefined
+  let loaded = 0
+  let skipped = 0
+  for (;;) {
+    let page: any
+    try {
+      page = await api.storage.scan({ prefix, limit: 200, ...(after ? { after } : {}) })
+    } catch (err) {
+      log("storage scan failed", err)
+      return
+    }
+    for (const entry of page?.entries ?? []) {
+      const rel = String(entry.key).slice(prefix.length)
+      const v = entry.value
+      // Drop malformed/corrupt entries instead of serving them.
+      if (v && typeof v === "object" && typeof (v as Record<string, unknown>).summary === "string" && typeof (v as Record<string, unknown>).rel === "string") {
+        let fileEntry = v as FileEntry
+        
+        // Decompress if compressed
+        if (fileEntry.compressed) {
+          try {
+            const decompressed = await decompressData(new Uint8Array(fileEntry.summary as any))
+            fileEntry = { ...fileEntry, summary: Buffer.from(decompressed).toString("utf8"), compressed: false }
+          } catch (err) {
+            log("decompression failed", rel, err)
+            continue
+          }
+        }
+        
+        // Validate cache version - if missing or mismatched, skip (will be regenerated)
+        if (fileEntry.cacheVersion !== undefined && fileEntry.cacheVersion === computeCacheVersion(fileEntry)) {
+          cache.set(rel, fileEntry)
+          loaded++
+        } else {
+          skipped++
+          // Remove stale entry
+          try {
+            await api.storage.remove(`loc/${locKey}/file/` + rel)
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    }
+    if (!page?.next) break
+    after = page.next
+  }
+  if (skipped > 0) {
+    log(`cache: loaded ${loaded} entries, skipped ${skipped} stale entries`)
+  }
+}
+
+export async function migrateLegacy(
+  api: Context,
+  log: (...args: unknown[]) => void
+): Promise<void> {
+  let after: string | undefined
+  let removed = 0
+  for (;;) {
+    let page: any
+    try {
+      page = await api.storage.scan({ prefix: "file/", limit: 200, ...(after ? { after } : {}) })
+    } catch {
+      return
+    }
+    const entries = page?.entries ?? []
+    for (const entry of entries) {
+      try {
+        await api.storage.remove(entry.key)
+        removed++
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!page?.next) break
+    after = page.next
+  }
+  if (removed) log(`migrated ${removed} legacy cache entries`)
+}
+
+export async function saveEntry(
+  api: Context,
+  locKey: string,
+  entry: FileEntry,
+  cache: Map<string, FileEntry>,
+  opts: Options,
+  log: (...args: unknown[]) => void
+): Promise<void> {
+  // Add cache version for validation
+  let entryWithVersion: FileEntry = {
+    ...entry,
+    cacheVersion: computeCacheVersion(entry),
+  }
+  
+  // Compress if summary is larger than threshold
+  if (entryWithVersion.summary.length > COMPRESSION_THRESHOLD) {
+    try {
+      const compressed = await compressData(new TextEncoder().encode(entryWithVersion.summary))
+      entryWithVersion = {
+        ...entryWithVersion,
+        summary: Array.from(compressed) as any, // Store as array for JSON serialization
+        compressed: true,
+      }
+    } catch (err) {
+      log("compression failed", entry.rel, err)
+    }
+  }
+  
+  cache.set(entry.rel, entryWithVersion)
+  // LRU eviction: keep cache bounded to ~2x maxSummaries
+  const maxCacheSize = opts.maxSummaries * 2
+  if (cache.size > maxCacheSize) {
+    const oldestKey = cache.keys().next().value
+    if (oldestKey) {
+      cache.delete(oldestKey)
+      try {
+        await api.storage.remove(`loc/${locKey}/file/` + oldestKey)
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  try {
+    await api.storage.set(`loc/${locKey}/file/` + entry.rel, entryWithVersion as any)
+  } catch (err) {
+    log("storage set failed", entry.rel, err)
+  }
+}
+
+export async function pruneCache(
+  api: Context,
+  locKey: string,
+  files: string[],
+  cache: Map<string, FileEntry>
+): Promise<void> {
+  const present = new Set(files)
+  for (const rel of [...cache.keys()]) {
+    if (!present.has(rel)) {
+      cache.delete(rel)
+      try {
+        await api.storage.remove(`loc/${locKey}/file/` + rel)
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}

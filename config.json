@@ -1,0 +1,32 @@
+{
+  "inject": "changed",
+  "injectStrategy": "changed",
+  "summarizer": "outline",
+  "registerTool": true,
+  "refreshOnWrite": true,
+  "respectGitignore": true,
+  "allowBroadRoot": false,
+  "treeDepth": 5,
+  "maxInjectedChars": 12000,
+  "maxSummaries": 40,
+  "warmupSummaries": 25,
+  "debug": false,
+  "walkConcurrency": "auto",
+  "summarizeConcurrency": 4,
+  "summaryLength": "medium",
+  "autoTune": true,
+  "exportJsonl": false,
+  "exportJsonlPath": ".opencode/workspace-map.jsonl",
+  "lspTimeoutMs": 5000,
+  "lspMaxSymbols": 50,
+  "indexDotDirs": [".github", ".opencode", ".vscode", ".devcontainer", ".gitlab"],
+  "watchEnabled": false,
+  "includeReverseDeps": true,
+  "injectionFormat": "markdown",
+  "followSymlinks": false,
+  "metrics": {
+    "enabled": false,
+    "exporter": "console",
+    "intervalMs": 60000
+  }
+}
