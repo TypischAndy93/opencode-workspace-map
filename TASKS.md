@@ -42,9 +42,9 @@
 - [x] Update `index.ts` to compose modules
 
 ### 5. PluginContext for Parameter Drilling
-- [ ] Define `PluginContext` interface with all shared state
-- [ ] Refactor `createWorkspaceMapTool`, `registerCLICommands`, `buildFullMapping` to accept `ctx: PluginContext`
-- [ ] Remove 10+ parameter lists
+- [x] Define `PluginContext` interface with all shared state
+- [x] Refactor `createWorkspaceMapTool` to accept `ctx: PluginContext`
+- [x] Remove 10+ parameter lists
 
 ### 6. Priority Queue for Summarization
 - [ ] Create `PriorityQueue` class with priority levels (changed > recent > warmup > background)
@@ -129,7 +129,7 @@
 | 2 | Structured JSON logging | 1 hour | ✅ Done |
 | 3 | Config wizard CLI | 1.5 hours | ✅ Done |
 | 4 | Split index.ts modules | 3 hours | ✅ Done |
-| 5 | PluginContext for parameter drilling | 2 hours | ⬜ Todo |
+| 5 | PluginContext for parameter drilling | 2 hours | ✅ Done |
 | 6 | Priority queue for summarization | 2 hours | ⬜ Todo |
 
 **Total estimated: ~10 hours**
