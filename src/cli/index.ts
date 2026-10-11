@@ -42,12 +42,15 @@ export async function startWatch(
   root: string,
   cache: Map<string, FileEntry>,
   stats: Stats,
+  reverseDeps: Map<string, Set<string>>,
   listFiles: (force: boolean) => Promise<string[]>,
   summarizeMany: (rels: string[], force: boolean) => Promise<void>,
   log: (...args: unknown[]) => void,
   watchOptions: { debounceMs?: number; pattern?: string; once?: boolean } = {}
 ): Promise<{ stop: () => void }> {
   const { watch } = await import("node:fs")
+  const { promises: fs } = await import("node:fs")
+  const { join } = await import("node:path")
   
   // Get watch config with defaults
   const watchConfig = opts.watch ?? {}
@@ -60,6 +63,17 @@ export async function startWatch(
   const pending = new Map<string, NodeJS.Timeout>()
   let batchTimer: NodeJS.Timeout | null = null
   const pendingBatch = new Set<string>()
+  let disposed = false
+  let pollTimer: NodeJS.Timeout | null = null
+  let lastKnownFiles: Set<string> | null = null
+  
+  // Polling fallback interval (ms)
+  const POLL_INTERVAL = 5000
+
+  async function getCurrentFiles(): Promise<Set<string>> {
+    const files = await listFiles(true)
+    return new Set(files)
+  }
 
   function flushBatch() {
     if (batchTimer) {
@@ -77,7 +91,7 @@ export async function startWatch(
     summarizeMany(batch, true).catch((err) => log("batch summarize failed", err))
     
     if (once) {
-      watcher.close()
+      stop()
       log("Watch completed (once mode)")
     }
   }
@@ -101,11 +115,41 @@ export async function startWatch(
           await summarizeMany([rel], true)
         }
         if (once) {
-          watcher.close()
+          stop()
           log("Watch completed (once mode)")
         }
       }, debounceMs)
       pending.set(rel, timeout)
+    }
+  }
+
+  async function handleFileChange(rel: string, eventType: string) {
+    if (disposed) return
+    if (pattern && !pattern.test(rel)) return
+    
+    const absPath = join(root, rel)
+    
+    try {
+      // Check if file still exists
+      await fs.stat(absPath)
+      
+      // File exists - schedule for summarization
+      if (eventType === "change" || eventType === "rename") {
+        scheduleBatch(rel)
+      }
+    } catch (err: any) {
+      if (err.code === "ENOENT") {
+        // File was deleted - remove from cache and update tree
+        if (cache.delete(rel)) {
+          log(`file deleted: ${rel}`)
+          // Invalidate reverse deps
+          for (const [imported, importers] of reverseDeps.entries()) {
+            if (importers.has(rel)) {
+              importers.delete(rel)
+            }
+          }
+        }
+      }
     }
   }
 
@@ -114,20 +158,69 @@ export async function startWatch(
     if (eventType === "change" || eventType === "rename") {
       const rel = filename
       if (pattern && !pattern.test(rel)) return
-      scheduleBatch(rel)
+      await handleFileChange(rel, eventType)
     }
   })
 
-  log(`watching ${root} for changes${pattern ? ` (pattern: ${pattern.source})` : ""}${once ? " (once mode)" : ""}${batchChanges ? " (batched)" : ""}`)
+  // Polling fallback for reliability
+  async function startPolling() {
+    if (disposed) return
+    lastKnownFiles = await getCurrentFiles()
+    
+    pollTimer = setInterval(async () => {
+      if (disposed) return
+      
+      try {
+        const currentFiles = await getCurrentFiles()
+        
+        // Detect new files
+        for (const rel of currentFiles) {
+          if (!lastKnownFiles!.has(rel)) {
+            log(`new file detected via polling: ${rel}`)
+            scheduleBatch(rel)
+          }
+        }
+        
+        // Detect deleted files
+        for (const rel of lastKnownFiles!) {
+          if (!currentFiles.has(rel)) {
+            if (cache.delete(rel)) {
+              log(`deleted file detected via polling: ${rel}`)
+              for (const [imported, importers] of reverseDeps.entries()) {
+                if (importers.has(rel)) {
+                  importers.delete(rel)
+                }
+              }
+            }
+          }
+        }
+        
+        lastKnownFiles = currentFiles
+      } catch (err) {
+        log("polling error", err)
+      }
+    }, POLL_INTERVAL)
+  }
+
+  function stop() {
+    disposed = true
+    if (batchTimer) clearTimeout(batchTimer)
+    if (pollTimer) clearInterval(pollTimer!)
+    for (const timeout of pending.values()) clearTimeout(timeout)
+    pending.clear()
+    pendingBatch.clear()
+    watcher.close()
+    log("watch stopped")
+  }
+
+  // Start polling fallback
+  startPolling()
+
+  log(`watching ${root} for changes${pattern ? ` (pattern: ${pattern.source})` : ""}${once ? " (once mode)" : ""}${batchChanges ? " (batched)" : ""} + polling`)
 
   return {
     stop: () => {
-      if (batchTimer) clearTimeout(batchTimer)
-      for (const timeout of pending.values()) clearTimeout(timeout)
-      pending.clear()
-      pendingBatch.clear()
-      watcher.close()
-      log("watch stopped")
+      stop()
     }
   }
 }
@@ -138,6 +231,7 @@ export function registerWatchCommand(
   root: string,
   cache: Map<string, FileEntry>,
   stats: Stats,
+  reverseDeps: Map<string, Set<string>>,
   listFiles: (force: boolean) => Promise<string[]>,
   summarizeMany: (rels: string[], force: boolean) => Promise<void>,
   log: (...args: unknown[]) => void
@@ -161,8 +255,8 @@ export function registerWatchCommand(
         },
         additionalProperties: false,
       },
-      execute: async (input: { debounceMs?: number; pattern?: string; once?: boolean; batchChanges?: boolean; batchTimeoutMs?: number } = {}) => {
-        const watcher = await startWatch(api, opts, root, cache, stats, listFiles, summarizeMany, log, input)
+      execute: async function(input: { debounceMs?: number; pattern?: string; once?: boolean; batchChanges?: boolean; batchTimeoutMs?: number } = {}) {
+        const watcher = await startWatch(api, opts, root, cache, stats, reverseDeps, listFiles, summarizeMany, log, input)
         if (!input.once) {
           log("Watch started. Press Ctrl+C to stop.")
           
@@ -188,11 +282,14 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
     entryPrefix, filesCache, vcsCache, filterCtx, treeCache
   } = ctx
   
+  // Ensure reverseDeps is captured for async closures
+  const reverseDepsRef = reverseDeps
+  
   if (!api.command?.transform) {
     log("command domain not available, skipping CLI commands registration")
     return
   }
-
+  
   api.command.transform((editor: { add: (cmd: any) => void }) => {
     // workspace-map:dump - Output full workspace map to stdout
     editor.add({

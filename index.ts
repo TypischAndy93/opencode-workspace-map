@@ -311,7 +311,7 @@ export default Plugin.define({
 
     // Register watch command
     if (opts.watchEnabled) {
-      registerWatchCommand(api, opts, root, cache, stats, listFiles, summarizeMany, log)
+      registerWatchCommand(api, opts, root, cache, stats, reverseDeps, listFiles, summarizeMany, log)
     }
 
     // ------------------------------------------------------------ filesystem
