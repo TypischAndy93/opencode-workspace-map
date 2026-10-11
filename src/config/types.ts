@@ -47,6 +47,8 @@ export type InjectMode = "off" | "tree" | "changed" | "full"
 export type InjectStrategy = "first" | "changed" | "always"
 export type WalkConcurrency = number | "auto"
 
+export type LogFn = (...args: unknown[]) => void
+
 export interface FileEntry {
   rel: string
   size: number

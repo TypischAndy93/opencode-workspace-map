@@ -100,6 +100,7 @@ export type {
 }
 
 export { DEFAULT_IGNORES, CODE_EXT, DATA_EXT, WRITE_TOOLS, TOOL_NAME, REFRESH_CAP, CACHE_VERSION, computeCacheVersion } from "./types.ts"
+export type { LogFn } from "./types.ts"
 export { TOP_LEVEL_IGNORES, DOT_DIR_ALLOW, DOT_FILE_ALLOW, SECRET_EXT, SECRET_STEM, SECRET_STEM_EXT, LOCKFILES, BINARY_EXT } from "../shared.ts"
 
 export { DEFAULT_OPTIONS } from "./types.ts"
@@ -107,7 +108,7 @@ export { DEFAULT_OPTIONS } from "./types.ts"
 export { languageRuleRegistry, type LanguageRules } from "../summarizers/languages/registry.ts"
 export { GENERIC_CODE_SYMBOL_RULES } from "../summarizers/languages/generic.ts"
 
-export { entryPrefix, LEGACY_PREFIX } from "../utils/hash.ts"
+export { entryPrefix, LEGACY_PREFIX, locKey } from "../utils/hash.ts"
 
 export function familyOf(ext: string): "js" | "py" | "go" | "rust" | "jvm" | "code" | "data" | "other" {
   if (["ts", "tsx", "js", "jsx", "mjs", "cjs", "vue", "svelte"].includes(ext)) return "js"
