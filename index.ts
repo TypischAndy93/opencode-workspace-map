@@ -336,6 +336,7 @@ export default Plugin.define({
       filesCache,
       vcsCache,
       filterCtx,
+      treeCache,
     })
 
     async function listFiles(force: boolean): Promise<string[]> {

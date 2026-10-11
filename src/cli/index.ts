@@ -1,11 +1,10 @@
 import type { Options, FileEntry, Stats, WorkspaceMapInput } from "../config/index.ts"
 import type { Context } from "@opencode/plugin/promise/plugin"
 import { TOOL_NAME } from "../config/index.ts"
-import { renderTree } from "../injection/render.ts"
+import { renderTree, renderJson, buildTree, convertToImmutable, createMutableNode, addPathToMutableNode } from "../injection/render.ts"
 import { createFilterContext, walk } from "../fs/filter.ts"
 import { globToRegex } from "../fs/gitignore.ts"
 import { buildFullMapping, buildDigest, buildInjectionRev } from "../injection/builder.ts"
-import { renderJson } from "../injection/render.ts"
 import { locKey } from "../utils/hash.ts"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
@@ -34,6 +33,7 @@ export interface CLICommandsContext {
   filesCache: { at: number; files: string[] }
   vcsCache: { at: number; files: string[] }
   filterCtx: ReturnType<typeof createFilterContext>
+  treeCache: ReturnType<typeof createMutableNode> | null
 }
 
 export async function startWatch(
@@ -185,7 +185,7 @@ export function registerWatchCommand(
 export function registerCLICommands(ctx: CLICommandsContext): void {
   const { 
     api, opts, root, cache, stats, reverseDeps, listFiles, summarizeMany, getChangedFilesCached, log, project, broadRoot,
-    entryPrefix, filesCache, vcsCache, filterCtx
+    entryPrefix, filesCache, vcsCache, filterCtx, treeCache
   } = ctx
   
   if (!api.command?.transform) {
@@ -517,6 +517,129 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         const text = `✅ Cache cleared (${cleared} entries removed). Next injection will trigger full re-index.`
         console.log(text)
         return { content: text, cleared }
+      },
+    })
+
+    // workspace-map:export - Export workspace map to file
+    editor.add({
+      name: "workspace-map:export",
+      description: "Export the workspace map to a JSON file",
+      input: {
+        type: "object",
+        properties: {
+          output: { type: "string", description: "Output file path (default: .opencode/workspace-map.json)" },
+          format: { type: "string", enum: ["json"], description: "Export format (default: json)" },
+          overwrite: { type: "boolean", description: "Overwrite existing file without prompt (default: false)" },
+        },
+        additionalProperties: false,
+      },
+      execute: async (input: { output?: string; format?: "json"; overwrite?: boolean } = {}) => {
+        try {
+          const files = await listFiles(true)
+          const changed = await getChangedFilesCached()
+          const outputPath = input.output ?? path.join(root, ".opencode", "workspace-map.json")
+          
+          // Check if file exists and overwrite is not set
+          if (!input.overwrite) {
+            try {
+              await fs.stat(outputPath)
+              throw new Error(`File already exists: ${outputPath}. Use --overwrite=true to overwrite.`)
+            } catch (err: any) {
+              if (err.code !== "ENOENT") throw err
+            }
+          }
+          
+          // Ensure output directory exists
+          await fs.mkdir(path.dirname(outputPath), { recursive: true })
+          
+          // Use cached tree if available
+          const tree = treeCache ? convertToImmutable(treeCache) : undefined
+          
+          const jsonOutput = renderJson(files, changed, cache, reverseDeps, opts, broadRoot, { summaries: stats.summaries, walks: stats.walks, files: stats.files }, filterCtx.isGenerated, tree)
+          
+          await fs.writeFile(outputPath, jsonOutput)
+          
+          const text = `✅ Workspace map exported to ${outputPath} (${files.length} files)`
+          console.log(text)
+          return { content: text, path: outputPath, fileCount: files.length }
+        } catch (err) {
+          log("export failed", err)
+          throw err
+        }
+      },
+    })
+
+    // workspace-map:import - Import workspace map from file
+    editor.add({
+      name: "workspace-map:import",
+      description: "Import a workspace map from a JSON file (populates cache, does not re-summarize)",
+      input: {
+        type: "object",
+        properties: {
+          input: { type: "string", description: "Input file path (default: .opencode/workspace-map.json)" },
+          merge: { type: "boolean", description: "Merge with existing cache instead of replacing (default: false)" },
+        },
+        additionalProperties: false,
+      },
+      execute: async (input: { input?: string; merge?: boolean } = {}) => {
+        try {
+          const inputPath = input.input ?? path.join(root, ".opencode", "workspace-map.json")
+          
+          const fileContent = await fs.readFile(inputPath, "utf8")
+          const data = JSON.parse(fileContent)
+          
+          if (!data.tree || !data.notes) {
+            throw new Error("Invalid workspace map file: missing tree or notes")
+          }
+          
+          let importedFiles = 0
+          let importedSummaries = 0
+          
+          if (!input.merge) {
+            cache.clear()
+            reverseDeps.clear()
+          }
+          
+          // Restore file entries from notes
+          for (const [rel, note] of Object.entries(data.notes as Record<string, any>)) {
+            const entry: FileEntry = {
+              rel,
+              size: note.size ?? 0,
+              mtimeMs: note.mtimeMs ?? 0,
+              summary: note.summary ?? "",
+              symbols: note.symbols ?? [],
+              imports: note.imports ?? [],
+              kind: note.kind ?? "outline",
+              updatedAt: note.updatedAt ?? Date.now(),
+              sections: note.sections,
+              cacheVersion: note.cacheVersion,
+              compressed: note.compressed,
+            }
+            cache.set(rel, entry)
+            importedFiles++
+            if (entry.kind !== "skipped" && entry.kind !== "generated") {
+              importedSummaries++
+            }
+            
+            // Restore reverse deps
+            if (note.importedBy && Array.isArray(note.importedBy)) {
+              reverseDeps.set(rel, new Set(note.importedBy))
+            }
+          }
+          
+          // Note: treeCache will be rebuilt on next listFiles() call
+          
+          // Update caches
+          filesCache.at = 0
+          filesCache.files = []
+          
+          const text = `✅ Workspace map imported from ${inputPath} (${importedFiles} files, ${importedSummaries} summaries)`
+          console.log(text)
+          return { content: text, importedFiles, importedSummaries }
+        } catch (err) {
+          log("import failed", err)
+          throw err
+        }
       },
     })
   })
