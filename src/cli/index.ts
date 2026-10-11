@@ -739,5 +739,184 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         }
       },
     })
+
+    // workspace-map:init - Interactive configuration wizard
+    editor.add({
+      name: "workspace-map:init",
+      description: "Interactive configuration wizard for workspace-map",
+      input: {
+        type: "object",
+        properties: {
+          output: { type: "string", description: "Output config file path (default: .opencode/workspace-map.json)" },
+          overwrite: { type: "boolean", description: "Overwrite existing config without prompt (default: false)" },
+        },
+        additionalProperties: false,
+      },
+      execute: async (input: { output?: string; overwrite?: boolean } = {}) => {
+        const { stdin, stdout } = process
+        const readline = await import("node:readline/promises")
+        
+        const rl = readline.createInterface({ input: stdin, output: stdout })
+        
+        const ask = async (question: string, defaultValue?: string): Promise<string> => {
+          const prompt = defaultValue ? `${question} [${defaultValue}]: ` : `${question}: `
+          const answer = await rl.question(prompt)
+          return answer.trim() || defaultValue || ""
+        }
+        
+        const askBool = async (question: string, defaultValue: boolean = false): Promise<boolean> => {
+          const defaultStr = defaultValue ? "Y/n" : "y/N"
+          const answer = await rl.question(`${question} [${defaultStr}]: `)
+          const normalized = answer.trim().toLowerCase()
+          if (!normalized) return defaultValue
+          return normalized === "y" || normalized === "yes"
+        }
+        
+        const askChoice = async (question: string, choices: string[], defaultValue?: string): Promise<string> => {
+          const choicesStr = choices.join("/")
+          const prompt = defaultValue ? `${question} (${choicesStr}) [${defaultValue}]: ` : `${question} (${choicesStr}): `
+          let answer: string
+          do {
+            answer = (await rl.question(prompt)).trim().toLowerCase()
+            if (!answer && defaultValue) return defaultValue
+          } while (!choices.includes(answer))
+          return answer
+        }
+
+        console.log("\n🔧 Workspace Map Configuration Wizard")
+        console.log("=====================================\n")
+
+        // Inject mode
+        const inject = await askChoice(
+          "Injection mode",
+          ["off", "tree", "changed", "full"],
+          "changed"
+        )
+
+        // Summarizer
+        const summarizer = await askChoice(
+          "Default summarizer",
+          ["outline", "model", "lsp"],
+          "outline"
+        )
+
+        // Max files
+        const maxFilesInput = await ask("Max files to index", "3000")
+        const maxFiles = parseInt(maxFilesInput, 10) || 3000
+
+        // Max file bytes
+        const maxFileBytesInput = await ask("Max file size to summarize (bytes)", "500000")
+        const maxFileBytes = parseInt(maxFileBytesInput, 10) || 500000
+
+        // Summarize concurrency
+        const summarizeConcurrencyInput = await ask("Concurrent summarizations", "4")
+        const summarizeConcurrency = parseInt(summarizeConcurrencyInput, 10) || 4
+
+        // Ignore patterns
+        const ignoreExtraInput = await ask(
+          "Extra ignore patterns (comma-separated, e.g. 'dist,build,*.generated.ts')",
+          ""
+        )
+        const ignoreExtra = ignoreExtraInput
+          ? ignoreExtraInput.split(",").map(s => s.trim()).filter(Boolean)
+          : []
+
+        // Include patterns
+        const includeInput = await ask(
+          "Include patterns (comma-separated, e.g. 'src/**,tests/**)",
+          ""
+        )
+        const include = includeInput
+          ? includeInput.split(",").map(s => s.trim()).filter(Boolean)
+          : []
+
+        // Debug mode
+        const debug = await askBool("Enable debug logging", false)
+
+        // Log format
+        const logFormat = await askChoice(
+          "Log format",
+          ["text", "json"],
+          "text"
+        )
+
+        // Cost tracking
+        const costTrackingEnabled = await askBool("Enable cost tracking", false)
+        let costTracking: Options["costTracking"] = { enabled: false }
+        if (costTrackingEnabled) {
+          const inputPrice = await ask("Input token price per 1M tokens (USD)", "0.0000015")
+          const outputPrice = await ask("Output token price per 1M tokens (USD)", "0.000006")
+          costTracking = {
+            enabled: true,
+            inputTokenPriceUsd: parseFloat(inputPrice) || 0.0000015,
+            outputTokenPriceUsd: parseFloat(outputPrice) || 0.000006,
+            logIntervalMs: 60000,
+          }
+        }
+
+        // Metrics
+        const metricsEnabled = await askBool("Enable OpenTelemetry metrics", false)
+        let metrics: Options["metrics"] = { enabled: false }
+        if (metricsEnabled) {
+          const exporter = await askChoice("Metrics exporter", ["console", "otlp"], "console")
+          metrics = { enabled: true, exporter: exporter as "console" | "otlp", intervalMs: 30000 }
+        }
+
+        // Auto-tune
+        const autoTune = await askBool("Enable auto-tuning based on project type", true)
+
+        // Watch mode
+        const watchEnabled = await askBool("Enable file watch mode", true)
+
+        // Build config object
+        const config = {
+          inject,
+          summarizer,
+          maxFiles,
+          maxFileBytes,
+          summarizeConcurrency,
+          ignoreExtra,
+          include,
+          debug,
+          logFormat,
+          costTracking,
+          metrics,
+          autoTune,
+          watchEnabled,
+        }
+
+        // Determine output path
+        const outputPath = input.output || path.join(root, ".opencode", "workspace-map.json")
+
+        // Check if file exists
+        if (!input.overwrite) {
+          try {
+            await fs.stat(outputPath)
+            const overwrite = await askBool(`Config file already exists at ${outputPath}. Overwrite?`, false)
+            if (!overwrite) {
+              rl.close()
+              return { content: "Configuration wizard cancelled." }
+            }
+          } catch {
+            // File doesn't exist, proceed
+          }
+        }
+
+        // Ensure output directory exists
+        await fs.mkdir(path.dirname(outputPath), { recursive: true })
+
+        // Write config file
+        await fs.writeFile(outputPath, JSON.stringify(config, null, 2))
+
+        rl.close()
+
+        const successMsg = `✅ Configuration written to ${outputPath}`
+        console.log(successMsg)
+        console.log("\nYou can now use the plugin with this configuration.")
+        console.log("To modify later, run this command again or edit the file directly.")
+
+        return { content: successMsg, path: outputPath, config }
+      },
+    })
   })
 }
