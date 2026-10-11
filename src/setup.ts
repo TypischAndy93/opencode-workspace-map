@@ -157,7 +157,7 @@ export async function initializePlugin(api: Context): Promise<{ ctx: PluginConte
     root.toLowerCase() === path.dirname(home).toLowerCase()
   const effectiveMaxFiles = broadRoot && !opts.allowBroadRoot ? Math.min(opts.maxFiles, 800) : opts.maxFiles
 
-  const filterCtx = createFilterContext(opts, stats, root, effectiveMaxFiles, logFn)
+  const filterCtx = await createFilterContext(opts, stats, root, effectiveMaxFiles, logFn)
 
   // Register CLI commands
   registerCLICommands({

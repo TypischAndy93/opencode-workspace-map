@@ -71,9 +71,9 @@
 - [ ] Expose metrics for tuning
 
 ### 10. Generated File Heuristics
-- [ ] Detect minified files (single line > 500 chars)
-- [ ] Detect license headers (SPDX, MIT, Apache)
-- [ ] Detect build outputs via `package.json` `outDir`/`dist`
+- [x] Detect minified files (single line > 500 chars)
+- [x] Detect license headers (SPDX, MIT, Apache)
+- [x] Detect build outputs via `package.json` `outDir`/`dist`
 
 ---
 
