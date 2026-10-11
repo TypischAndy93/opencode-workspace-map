@@ -8,7 +8,7 @@ export async function modelSummary(
   api: Context,
   opts: Options,
   log: (...args: unknown[]) => void
-): Promise<{ summary: string; symbols: string[] } | undefined> {
+): Promise<{ summary: string; symbols: string[]; inputTokens?: number; outputTokens?: number } | undefined> {
   if (isSecret(rel)) return undefined
   const model = await getModelRef(api, opts)
   if (!model) return undefined
@@ -38,7 +38,12 @@ export async function modelSummary(
     if (parsed.summary && maxLength && parsed.summary.length > maxLength) {
       parsed.summary = parsed.summary.slice(0, maxLength - 1) + "\u2026"
     }
-    return parsed.summary ? parsed : undefined
+    
+    // Estimate token usage (approximate: 1 token ≈ 4 chars for English)
+    const promptTokens = Math.ceil((body.length + 200) / 4) // prompt + template
+    const responseTokens = Math.ceil((res?.text?.length ?? 0) / 4)
+    
+    return parsed.summary ? { ...parsed, inputTokens: promptTokens, outputTokens: responseTokens } : undefined
   } catch (err) {
     log("model summary failed", rel, err)
     return undefined

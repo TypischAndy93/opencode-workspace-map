@@ -272,6 +272,12 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         const lastInjectionChars = stats.lastInjectionChars
         const lastInjectionAt = stats.lastInjectionAt
         
+        // Cost tracking
+        const totalInputTokens = stats.totalInputTokens
+        const totalOutputTokens = stats.totalOutputTokens
+        const totalCostUsd = stats.totalCostUsd
+        const costBySummarizer = stats.costBySummarizer
+        
         // Calculate cache size
         let cacheSizeBytes = 0
         for (const entry of cache.values()) {
@@ -320,6 +326,28 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
               uniqueImports: reverseDeps.size,
               totalReferences: reverseDepsCount,
             },
+            cost: {
+              totalInputTokens,
+              totalOutputTokens,
+              totalCostUsd: Math.round(totalCostUsd * 1_000_000) / 1_000_000,
+              bySummarizer: {
+                outline: {
+                  inputTokens: costBySummarizer.outline.inputTokens,
+                  outputTokens: costBySummarizer.outline.outputTokens,
+                  costUsd: Math.round(costBySummarizer.outline.costUsd * 1_000_000) / 1_000_000,
+                },
+                model: {
+                  inputTokens: costBySummarizer.model.inputTokens,
+                  outputTokens: costBySummarizer.model.outputTokens,
+                  costUsd: Math.round(costBySummarizer.model.costUsd * 1_000_000) / 1_000_000,
+                },
+                lsp: {
+                  inputTokens: costBySummarizer.lsp.inputTokens,
+                  outputTokens: costBySummarizer.lsp.outputTokens,
+                  costUsd: Math.round(costBySummarizer.lsp.costUsd * 1_000_000) / 1_000_000,
+                },
+              },
+            },
           }
           console.log(JSON.stringify(result, null, 2))
           return { content: JSON.stringify(result) }
@@ -353,6 +381,10 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
             `Timing:`,
             `  Last walk: ${lastWalkMs} ms`,
             `  Last injection: ${lastInjectionChars} chars at ${lastInjectionAt ? new Date(lastInjectionAt).toISOString() : "never"}`,
+            ``,
+            `Cost Tracking:`,
+            `  Total: $${totalCostUsd.toFixed(6)} (${totalInputTokens} in / ${totalOutputTokens} out tokens)`,
+            `  By summarizer: outline=$${costBySummarizer.outline.costUsd.toFixed(6)}, model=$${costBySummarizer.model.costUsd.toFixed(6)}, lsp=$${costBySummarizer.lsp.costUsd.toFixed(6)}`,
             ``,
             `Reverse Dependencies:`,
             `  Unique imports tracked: ${reverseDeps.size}`,

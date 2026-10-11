@@ -54,6 +54,7 @@ import {
   type SymbolInfo,
   type SummarySections,
   type MonorepoPackage,
+  type SummarizerKind,
   TOOL_NAME,
   REFRESH_CAP,
   loadSidecarConfig,
@@ -164,6 +165,15 @@ export default Plugin.define({
       lastWalkMs: 0,
       lastInjectionChars: 0,
       lastInjectionAt: 0,
+      // Cost tracking
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCostUsd: 0,
+      costBySummarizer: {
+        outline: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+        model: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+        lsp: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+      } as Record<SummarizerKind, { inputTokens: number; outputTokens: number; costUsd: number }>,
     }
 
     let filesCache: { at: number; files: string[] } = { at: 0, files: [] }
@@ -206,6 +216,37 @@ export default Plugin.define({
 
     const log = (...args: unknown[]) => {
       if (opts.debug) console.error("[workspace-map]", ...args)
+    }
+
+    // Cost tracking
+    let costLogTimer: ReturnType<typeof setTimeout> | undefined
+    function trackCost(kind: SummarizerKind, inputTokens: number, outputTokens: number): void {
+      if (!opts.costTracking?.enabled) return
+      const inputPrice = opts.costTracking.inputTokenPriceUsd ?? 0.0000015
+      const outputPrice = opts.costTracking.outputTokenPriceUsd ?? 0.000006
+      const cost = inputTokens * inputPrice + outputTokens * outputPrice
+      
+      stats.totalInputTokens += inputTokens
+      stats.totalOutputTokens += outputTokens
+      stats.totalCostUsd += cost
+      stats.costBySummarizer[kind].inputTokens += inputTokens
+      stats.costBySummarizer[kind].outputTokens += outputTokens
+      stats.costBySummarizer[kind].costUsd += cost
+    }
+
+    function startCostLogging(): void {
+      if (!opts.costTracking?.enabled) return
+      const interval = opts.costTracking.logIntervalMs ?? 60_000
+      costLogTimer = setInterval(() => {
+        if (stats.totalCostUsd > 0) {
+          log(`Cost summary: $${stats.totalCostUsd.toFixed(6)} (${stats.totalInputTokens} in / ${stats.totalOutputTokens} out tokens)`)
+          log(`  By summarizer: outline=${stats.costBySummarizer.outline.costUsd.toFixed(6)}, model=${stats.costBySummarizer.model.costUsd.toFixed(6)}, lsp=${stats.costBySummarizer.lsp.costUsd.toFixed(6)}`)
+        }
+      }, interval)
+    }
+
+    function stopCostLogging(): void {
+      if (costLogTimer) clearTimeout(costLogTimer)
     }
 
     // ---------------------------------------------------------------- helpers
@@ -467,6 +508,10 @@ export default Plugin.define({
           const modelResult = await modelSummary(rel, content, api, opts, log)
           if (modelResult) {
             m = { summary: modelResult.summary, symbols: modelResult.symbols.map(s => ({ name: s })), imports: [] }
+            // Track model summarization cost
+            if (modelResult.inputTokens && modelResult.outputTokens) {
+              trackCost("model", modelResult.inputTokens, modelResult.outputTokens)
+            }
           }
         } else if (summarizer === "lsp") {
           m = await lspSummarize(rel, content, api, opts, stats, log)
@@ -764,6 +809,7 @@ export default Plugin.define({
       disposed = true
       setDisposed(true)
       if (flushTimer) clearTimeout(flushTimer)
+      if (costLogTimer) clearTimeout(costLogTimer)
       await shutdownMetrics()
     }
   },
