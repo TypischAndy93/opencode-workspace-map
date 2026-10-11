@@ -219,7 +219,22 @@ export default Plugin.define({
     const effectiveMaxFiles = broadRoot && !opts.allowBroadRoot ? Math.min(opts.maxFiles, 800) : opts.maxFiles
 
     const log = (...args: unknown[]) => {
-      if (opts.debug) console.error("[workspace-map]", ...args)
+      if (!opts.debug) return
+      if (opts.logFormat === "json") {
+        const meta: Record<string, unknown> = {}
+        args.slice(1).forEach((arg, i) => {
+          meta[`arg${i}`] = arg
+        })
+        console.error(JSON.stringify({
+          timestamp: new Date().toISOString(),
+          plugin: "workspace-map",
+          level: "debug",
+          message: String(args[0]),
+          ...meta,
+        }))
+      } else {
+        console.error("[workspace-map]", ...args)
+      }
     }
 
     // Cost tracking

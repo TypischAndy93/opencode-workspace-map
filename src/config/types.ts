@@ -113,6 +113,7 @@ export interface Options {
   ignoreExtra: string[]
   include: string[]
   debug: boolean
+  logFormat?: "text" | "json"
   walkConcurrency: WalkConcurrency
   summarizeConcurrency: number
   summaryLength?: "short" | "medium" | "long"
@@ -282,6 +283,7 @@ export const DEFAULT_OPTIONS: Options = {
   ignoreExtra: [],
   include: [],
   debug: false,
+  logFormat: "text",
   walkConcurrency: "auto",
   summarizeConcurrency: 4,
   summaryLength: "medium",
