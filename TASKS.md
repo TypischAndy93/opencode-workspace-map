@@ -14,32 +14,32 @@
 ## ✅ P0 - Quick Wins (Start Here)
 
 ### 1. Fix modelSummaries Conflation
-- [ ] Separate `modelSummaries` and `lspSummaries` counters in `Stats` type
-- [ ] Update all increment sites in `index.ts` and `cli/index.ts`
-- [ ] Update cost tracking to distinguish model vs LSP
+- [x] Separate `modelSummaries` and `lspSummaries` counters in `Stats` type
+- [x] Update all increment sites in `index.ts` and `cli/index.ts`
+- [x] Update cost tracking to distinguish model vs LSP
 
 ### 2. Structured JSON Logging
-- [ ] Add `logJson(level, message, meta)` helper
-- [ ] Replace `console.error` calls with structured logging when `opts.debug`
-- [ ] Add `--log-format=json` CLI option
+- [x] Add `logFormat` option (text/json)
+- [x] Replace `console.error` calls with structured logging when `opts.debug`
+- [x] Add `logFormat` to config
 
 ### 3. Config Wizard CLI Command
-- [ ] Add `workspace-map:init` command
-- [ ] Interactive prompts for key options
-- [ ] Write `.opencode/workspace-map.json` sidecar config
+- [x] Add `workspace-map:init` command
+- [x] Interactive prompts for key options
+- [x] Write `.opencode/workspace-map.json` sidecar config
 
 ---
 
 ## 🏗️ P1 - Core Architecture (High Impact)
 
 ### 4. Split index.ts into Modules
-- [ ] `src/setup.ts` - Plugin initialization, option merging, validation
-- [ ] `src/injection-engine.ts` - `getInjection`, `listFiles`, tree caching
-- [ ] `src/summarization-engine.ts` - `summarize`, `summarizeMany`, fallback chains
-- [ ] `src/session-manager.ts` - Session tracking, recent files, injection state
-- [ ] `src/vcs-integration.ts` - Changed files, git detection
-- [ ] `src/hooks.ts` - Tool hooks (`refreshOnWrite`, `session.context`)
-- [ ] Update `index.ts` to compose modules
+- [x] `src/setup.ts` - Plugin initialization, option merging, validation
+- [x] `src/injection-engine.ts` - `getInjection`, `listFiles`, tree caching
+- [x] `src/summarization-engine.ts` - `summarize`, `summarizeMany`, fallback chains
+- [x] `src/session-manager.ts` - Session tracking, recent files, injection state
+- [x] `src/vcs-integration.ts` - Changed files, git detection
+- [x] `src/hooks.ts` - Tool hooks (`refreshOnWrite`, `session.context`)
+- [x] Update `index.ts` to compose modules
 
 ### 5. PluginContext for Parameter Drilling
 - [ ] Define `PluginContext` interface with all shared state
@@ -125,10 +125,10 @@
 
 | # | Task | Estimate | Status |
 |---|------|----------|--------|
-| 1 | Fix modelSummaries conflation | 30 min | ⬜ Todo |
-| 2 | Structured JSON logging | 1 hour | ⬜ Todo |
-| 3 | Config wizard CLI | 1.5 hours | ⬜ Todo |
-| 4 | Split index.ts modules | 3 hours | ⬜ Todo |
+| 1 | Fix modelSummaries conflation | 30 min | ✅ Done |
+| 2 | Structured JSON logging | 1 hour | ✅ Done |
+| 3 | Config wizard CLI | 1.5 hours | ✅ Done |
+| 4 | Split index.ts modules | 3 hours | ✅ Done |
 | 5 | PluginContext for parameter drilling | 2 hours | ⬜ Todo |
 | 6 | Priority queue for summarization | 2 hours | ⬜ Todo |
 
