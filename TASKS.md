@@ -66,9 +66,9 @@
 - [x] Flush on shutdown
 
 ### 9. Adaptive Walk Concurrency
-- [ ] Monitor walk duration vs file count
-- [ ] Increase/decrease `walkConcurrency` dynamically
-- [ ] Expose metrics for tuning
+- [x] Monitor walk duration vs file count
+- [x] Increase/decrease `walkConcurrency` dynamically
+- [x] Expose metrics for tuning
 
 ### 10. Generated File Heuristics
 - [x] Detect minified files (single line > 500 chars)

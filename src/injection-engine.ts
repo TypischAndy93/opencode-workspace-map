@@ -16,6 +16,7 @@ export interface InjectionEngine {
   getInjection(sessionID: string | undefined): Promise<string>
   getChangedFilesCached(): Promise<string[]>
   detectGit(): Promise<boolean>
+  cleanup(): void
 }
 
 export function createInjectionEngine(
@@ -42,6 +43,59 @@ export function createInjectionEngine(
   dirtyRef: { current: Set<string> }
 ): InjectionEngine {
 
+  // Adaptive walk concurrency tracking
+  const walkLatencies: number[] = []
+  let adaptiveWalkTimer: ReturnType<typeof setTimeout> | undefined
+
+  function recordWalkLatency(fileCount: number, durationMs: number): void {
+    if (!opts.adaptiveWalkConcurrency) return
+
+    const latencyPerFile = fileCount > 0 ? durationMs / fileCount : durationMs
+    walkLatencies.push(latencyPerFile)
+
+    // Keep only recent latencies (last 20 walks)
+    if (walkLatencies.length > 20) {
+      walkLatencies.shift()
+    }
+  }
+
+  function adjustWalkConcurrency(): void {
+    if (!opts.adaptiveWalkConcurrency) return
+    if (walkLatencies.length < 3) return // Need some samples first
+
+    const sorted = [...walkLatencies].sort((a, b) => a - b)
+    const medianLatency = sorted[Math.floor(sorted.length / 2)]
+
+    const minConcurrency = opts.adaptiveWalkMinConcurrency ?? 1
+    const maxConcurrency = opts.adaptiveWalkMaxConcurrency ?? 16
+    const targetLatency = opts.adaptiveWalkTargetLatencyMs ?? 5
+
+    let currentConcurrency = typeof opts.walkConcurrency === "number" ? opts.walkConcurrency : 4
+    let newConcurrency = currentConcurrency
+
+    // Adjust based on median latency vs target
+    if (medianLatency > targetLatency * 2 && currentConcurrency < maxConcurrency) {
+      newConcurrency = Math.min(currentConcurrency + 1, maxConcurrency)
+    } else if (medianLatency < targetLatency / 2 && currentConcurrency > minConcurrency) {
+      newConcurrency = Math.max(currentConcurrency - 1, minConcurrency)
+    }
+
+    if (newConcurrency !== currentConcurrency) {
+      opts.walkConcurrency = newConcurrency
+      log(`adaptive walk: concurrency ${currentConcurrency} → ${newConcurrency} (median latency: ${medianLatency.toFixed(2)}ms/file, target: ${targetLatency}ms)`)
+    }
+  }
+
+  function startAdaptiveWalkAdjustment(): void {
+    if (!opts.adaptiveWalkConcurrency) return
+    const interval = (opts.adaptiveWalkAdjustmentInterval ?? 10) * 60_000 // Convert to minutes
+    adaptiveWalkTimer = setInterval(adjustWalkConcurrency, interval)
+  }
+
+  function stopAdaptiveWalkAdjustment(): void {
+    if (adaptiveWalkTimer) clearTimeout(adaptiveWalkTimer)
+  }
+
   let vcsCacheLocal = vcsCache
 
   async function listFiles(force: boolean): Promise<string[]> {
@@ -52,11 +106,11 @@ export function createInjectionEngine(
     await walk(filterCtx, root, "", out)
     const walkDurationMs = Date.now() - t0
     out.sort()
-    
+
     // Incremental tree update
     const oldFiles = new Set(filesCache.files)
     const newFiles = new Set(out)
-    
+
     // Initialize tree if needed
     if (!treeCache.current) {
       treeCache.current = createMutableNode("", "", false)
@@ -70,14 +124,14 @@ export function createInjectionEngine(
           removePathFromMutableNode(treeCache.current!, rel)
         }
       }
-      
+
       // Find added files and add to tree
       for (const rel of newFiles) {
         if (!oldFiles.has(rel)) {
           addPathToMutableNode(treeCache.current!, rel, filterCtx.isGenerated)
         }
       }
-      
+
       // Update generated status for existing files
       for (const rel of newFiles) {
         if (oldFiles.has(rel)) {
@@ -85,18 +139,21 @@ export function createInjectionEngine(
         }
       }
     }
-    
+
     filesCache.at = Date.now()
     filesCache.files = out
     stats.files = out.length
     stats.walks++
     stats.lastWalkMs = walkDurationMs
-    
+
     // Record walk metrics
     if (metricsCollector) {
       metricsCollector.recordWalk(out.length, walkDurationMs)
     }
-    
+
+    // Record latency for adaptive concurrency
+    recordWalkLatency(out.length, walkDurationMs)
+
     // Prune cache entries whose files have vanished
     if (out.length < effectiveMaxFiles && (force || cache.size > out.length)) {
       const currentFiles = new Set(out)
@@ -151,16 +208,16 @@ export function createInjectionEngine(
     const gitRepo = await detectGit()
     const needFresh = !filesCache.at || Date.now() - filesCache.at >= opts.treeTtlMs
     const changeSignal = dirtyRef.current?.size > 0 || changed.length > 0
-    
+
     // Force fresh walk for new sessions
     const forceWalkNewSession = opts.forceWalkOnNewSession ?? true
     const isNewSession = forceWalkNewSession && sessionID && !sessionsWithInitialWalk.has(sessionID)
     const shouldWalk = needFresh || changeSignal || isNewSession || !gitRepo
-    
+
     if (isNewSession) {
       sessionsWithInitialWalk.add(sessionID)
     }
-    
+
     const files = shouldWalk ? await listFiles(false) : filesCache.files
     const rev = buildInjectionRev(files, changed, cache)
     const prev = injectionState.get(key)
@@ -200,5 +257,9 @@ export function createInjectionEngine(
     getInjection,
     getChangedFilesCached,
     detectGit,
+    cleanup: stopAdaptiveWalkAdjustment,
   }
+
+  // Start adaptive walk concurrency adjustment
+  startAdaptiveWalkAdjustment()
 }

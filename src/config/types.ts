@@ -159,6 +159,12 @@ export interface Options {
   }
   // Batch storage writes
   cacheFlushIntervalMs?: number
+  // Adaptive walk concurrency
+  adaptiveWalkConcurrency?: boolean
+  adaptiveWalkMinConcurrency?: number
+  adaptiveWalkMaxConcurrency?: number
+  adaptiveWalkTargetLatencyMs?: number
+  adaptiveWalkAdjustmentInterval?: number
 }
 
 export interface ProjectInfo {
@@ -328,6 +334,12 @@ export const DEFAULT_OPTIONS: Options = {
   },
   // Batch storage writes
   cacheFlushIntervalMs: 5000,
+  // Adaptive walk concurrency
+  adaptiveWalkConcurrency: true,
+  adaptiveWalkMinConcurrency: 1,
+  adaptiveWalkMaxConcurrency: 16,
+  adaptiveWalkTargetLatencyMs: 5,
+  adaptiveWalkAdjustmentInterval: 10,
   // Watch mode configuration
   watch: {
     debounceMs: 500,

@@ -204,6 +204,7 @@ export default Plugin.define({
       if (pluginCtx.flushTimer) clearTimeout(pluginCtx.flushTimer)
       if (pluginCtx.costLogTimer) clearTimeout(pluginCtx.costLogTimer)
       summarizationEngine.stopCostLogging()
+      injectionEngine.cleanup()
       await flushPendingWrites(pluginCtx.api, pluginCtx.locKey, pluginCtx.cache, pluginCtx.opts, logFn)
       await shutdownMetrics()
     }
