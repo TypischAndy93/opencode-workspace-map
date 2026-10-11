@@ -18,7 +18,8 @@ export async function buildFullMapping(
   recentBySession: Map<string, Map<string, number>>,
   recentGlobal: Map<string, number>,
   project: ProjectInfo,
-  isGenerated?: (rel: string) => boolean
+  isGenerated?: (rel: string) => boolean,
+  cachedTree?: import("../injection/render.ts").TreeNode
 ): Promise<string> {
   const files = await listFiles(false)
   const changed = await getChangedFiles()
@@ -54,7 +55,8 @@ export async function buildFullMapping(
     header.push(`Packages: ${project.packages.map(p => p.name).join(", ")}`)
   }
   
-  const parts: string[] = [...header, "", renderTree(files, opts, broadRoot, new Set(changed), isGenerated)]
+  // Use cached tree if available, otherwise build from files
+  const parts: string[] = [...header, "", renderTree(files, opts, broadRoot, new Set(changed), isGenerated, cachedTree)]
 
   if (target.length && opts.inject !== "tree") {
     parts.push("", "## File notes")
@@ -78,7 +80,7 @@ export async function buildFullMapping(
 
   // Handle JSON output
   if (opts.injectionFormat === "json" || opts.injectionFormat === "both") {
-    const jsonOutput = renderJson(files, changed, cache, reverseDeps, opts, broadRoot, stats, isGenerated)
+    const jsonOutput = renderJson(files, changed, cache, reverseDeps, opts, broadRoot, stats, isGenerated, cachedTree)
     if (opts.injectionFormat === "json") {
       return jsonOutput
     }

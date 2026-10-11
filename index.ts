@@ -92,7 +92,7 @@ import { loadCache, migrateLegacy, saveEntry, pruneCache } from "./src/storage/c
 
 import { buildFullMapping, buildDigest, buildInjectionRev } from "./src/injection/builder.js"
 
-import { renderTree, focusFiles, mapRev } from "./src/injection/render.js"
+import { renderTree, focusFiles, mapRev, buildTree, addPathToMutableNode, removePathFromMutableNode, updateGeneratedStatusInMutableNode, convertToImmutable, createMutableNode } from "./src/injection/render.js"
 
 import { createWorkspaceMapTool } from "./src/tool/index.js"
 import { registerWatchCommand, registerCLICommands } from "./src/cli/index.js"
@@ -173,6 +173,9 @@ export default Plugin.define({
     let disposed = false
     let gitignore: ReturnType<typeof compileGitignore> | undefined
     let pendingWrites: { rels: string[]; sessionID?: string }[] = []
+
+    // Tree cache for incremental updates (mutable tree with Map children)
+    let treeCache: ReturnType<typeof createMutableNode> | null = null
 
     // Initialize metrics if enabled (after cache is declared)
     const metricsCollector = await initializeMetrics(opts)
@@ -302,6 +305,40 @@ export default Plugin.define({
       await walk(filterCtx, root, "", out)
       const walkDurationMs = Date.now() - t0
       out.sort()
+      
+      // Incremental tree update
+      const oldFiles = new Set(filesCache.files)
+      const newFiles = new Set(out)
+      
+      // Initialize tree if needed
+      if (!treeCache) {
+        treeCache = createMutableNode("", "", false)
+        for (const f of out) {
+          addPathToMutableNode(treeCache, f, filterCtx.isGenerated)
+        }
+      } else {
+        // Find removed files and remove from tree
+        for (const rel of oldFiles) {
+          if (!newFiles.has(rel)) {
+            removePathFromMutableNode(treeCache!, rel)
+          }
+        }
+        
+        // Find added files and add to tree
+        for (const rel of newFiles) {
+          if (!oldFiles.has(rel)) {
+            addPathToMutableNode(treeCache!, rel, filterCtx.isGenerated)
+          }
+        }
+        
+        // Update generated status for existing files (in case it changed)
+        for (const rel of newFiles) {
+          if (oldFiles.has(rel)) {
+            updateGeneratedStatusInMutableNode(treeCache!, rel, filterCtx.isGenerated(rel))
+          }
+        }
+      }
+      
       filesCache = { at: Date.now(), files: out }
       stats.files = out.length
       stats.walks++
@@ -621,7 +658,9 @@ export default Plugin.define({
       let text: string
       const injectionType = sendFull ? "full" : "digest"
       if (sendFull) {
-        text = await buildFullMapping(api, opts, stats, cache, reverseDeps, root, broadRoot, sessionID, listFiles, getChangedFilesCached, summarizeMany, recentBySession, recentGlobal, project, filterCtx.isGenerated)
+        // Pass the cached tree (convert to immutable) to avoid rebuilding
+        const tree = treeCache ? convertToImmutable(treeCache) : undefined
+        text = await buildFullMapping(api, opts, stats, cache, reverseDeps, root, broadRoot, sessionID, listFiles, getChangedFilesCached, summarizeMany, recentBySession, recentGlobal, project, filterCtx.isGenerated, tree)
         stats.fullInjections++
       } else {
         text = buildDigest(files, changed, cache, broadRoot)

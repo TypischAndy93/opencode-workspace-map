@@ -9,15 +9,17 @@ export interface TreeNode {
   children: TreeNode[]
 }
 
+// Internal mutable node for tree building
+interface MutableNode {
+  name: string
+  rel: string
+  file: boolean
+  generated?: boolean
+  children: Map<string, MutableNode>
+}
+
 export function buildTree(files: string[], isGenerated?: (rel: string) => boolean): TreeNode {
-  interface Node {
-    name: string
-    rel: string
-    file: boolean
-    generated?: boolean
-    children: Map<string, Node>
-  }
-  const rootNode: Node = { name: "", rel: "", file: false, children: new Map() }
+  const rootNode: MutableNode = { name: "", rel: "", file: false, children: new Map() }
   for (const f of files) {
     const parts = f.split("/")
     let node = rootNode
@@ -34,7 +36,7 @@ export function buildTree(files: string[], isGenerated?: (rel: string) => boolea
     }
   }
 
-  const convert = (node: Node): TreeNode => ({
+  const convert = (node: MutableNode): TreeNode => ({
     name: node.name,
     rel: node.rel,
     file: node.file,
@@ -48,14 +50,210 @@ export function buildTree(files: string[], isGenerated?: (rel: string) => boolea
   return convert(rootNode)
 }
 
+/**
+ * Create a new mutable node
+ */
+export function createMutableNode(name: string, rel: string, file: boolean, generated?: boolean): MutableNode {
+  return { name, rel, file, generated, children: new Map() }
+}
+
+/**
+ * Add a path to a mutable node (internal function)
+ */
+export function addPathToMutableNode(node: MutableNode, rel: string, isGenerated?: (rel: string) => boolean): void {
+  const parts = rel.split("/")
+  let current = node
+  let currentRel = ""
+  for (let i = 0; i < parts.length; i++) {
+    const isFile = i === parts.length - 1
+    currentRel = currentRel ? `${currentRel}/${parts[i]}` : parts[i]
+    let child = current.children.get(parts[i])
+    if (!child) {
+      child = createMutableNode(parts[i], currentRel, isFile, isFile && isGenerated?.(currentRel))
+      current.children.set(parts[i], child)
+    }
+    current = child
+  }
+}
+
+/**
+ * Remove a path from a mutable node (internal function)
+ */
+export function removePathFromMutableNode(node: MutableNode, rel: string): boolean {
+  const parts = rel.split("/")
+  const path: MutableNode[] = [node]
+  let current = node
+  
+  // Find the path to the file
+  for (let i = 0; i < parts.length; i++) {
+    const child = current.children.get(parts[i])
+    if (!child) return false
+    current = child
+    path.push(current)
+  }
+  
+  // Remove from leaf up, cleaning up empty directories
+  for (let i = path.length - 1; i > 0; i--) {
+    const parent = path[i - 1]
+    const child = path[i]
+    
+    parent.children.delete(child.name)
+    
+    // If parent has no children and is not root, it will be cleaned up in next iteration
+    if (parent.children.size === 0 && i > 1) {
+      // Will be removed in next iteration
+    } else if (parent.children.size > 0) {
+      break // Parent still has other children, stop cleanup
+    }
+  }
+  
+  return true
+}
+
+/**
+ * Update generated status for a file in a mutable node
+ */
+export function updateGeneratedStatusInMutableNode(node: MutableNode, rel: string, isGenerated: boolean): boolean {
+  const parts = rel.split("/")
+  let current = node
+  
+  for (let i = 0; i < parts.length; i++) {
+    const child = current.children.get(parts[i])
+    if (!child) return false
+    current = child
+  }
+  
+  if (current.file) {
+    current.generated = isGenerated
+    return true
+  }
+  
+  return false
+}
+
+/**
+ * Convert mutable tree to immutable TreeNode for rendering
+ */
+export function convertToImmutable(node: MutableNode): TreeNode {
+  return {
+    name: node.name,
+    rel: node.rel,
+    file: node.file,
+    generated: node.generated,
+    children: [...node.children.values()]
+      .sort((a, b) => {
+        if (a.file !== b.file) return a.file ? 1 : -1
+        return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+      })
+      .map(convertToImmutable),
+  }
+}
+
+/**
+ * Add a file path to an existing tree incrementally
+ */
+export function addPathToTree(tree: TreeNode, rel: string, isGenerated?: (rel: string) => boolean): TreeNode {
+  const parts = rel.split("/")
+  let node: TreeNode & { children: TreeNode[] } = tree
+  
+  for (let i = 0; i < parts.length; i++) {
+    const isFile = i === parts.length - 1
+    let child = node.children.find(c => c.name === parts[i])
+    
+    if (!child) {
+      // Need to build the rest of the path
+      const newRel = node.rel ? `${node.rel}/${parts[i]}` : parts[i]
+      child = {
+        name: parts[i],
+        rel: newRel,
+        file: isFile,
+        generated: isFile && isGenerated?.(newRel),
+        children: []
+      }
+      node.children.push(child)
+      // Keep children sorted: directories first, then files, alphabetical
+      node.children.sort((a, b) => {
+        if (a.file !== b.file) return a.file ? 1 : -1
+        return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+      })
+    }
+    node = child
+  }
+  
+  // Update generated status if it's a file
+  if (node.file && isGenerated) {
+    node.generated = isGenerated(node.rel)
+  }
+  
+  return tree
+}
+
+/**
+ * Remove a file path from an existing tree incrementally
+ */
+export function removePathFromTree(tree: TreeNode, rel: string): TreeNode {
+  const parts = rel.split("/")
+  const nodes: (TreeNode & { children: TreeNode[] })[] = [tree]
+  let current: TreeNode & { children: TreeNode[] } = tree
+  
+  // Find the path to the file
+  for (let i = 0; i < parts.length; i++) {
+    const child = current.children.find(c => c.name === parts[i])
+    if (!child) return tree // Path doesn't exist
+    current = child
+    nodes.push(current)
+  }
+  
+  // Remove from leaf up, cleaning up empty directories
+  for (let i = nodes.length - 1; i > 0; i--) {
+    const parent = nodes[i - 1]
+    const child = nodes[i]
+    
+    const idx = parent.children.indexOf(child)
+    if (idx >= 0) {
+      parent.children.splice(idx, 1)
+    }
+    
+    // If parent has no children and is not root, it will be cleaned up in next iteration
+    if (parent.children.length === 0 && i > 1) {
+      // Will be removed in next iteration
+    } else if (parent.children.length > 0) {
+      break // Parent still has other children, stop cleanup
+    }
+  }
+  
+  return tree
+}
+
+/**
+ * Update generated status for a file in the tree
+ */
+export function updateGeneratedStatus(tree: TreeNode, rel: string, isGenerated: boolean): TreeNode {
+  const parts = rel.split("/")
+  let node: TreeNode & { children: TreeNode[] } = tree
+  
+  for (let i = 0; i < parts.length; i++) {
+    const child = node.children.find(c => c.name === parts[i])
+    if (!child) return tree
+    node = child
+  }
+  
+  if (node.file) {
+    node.generated = isGenerated
+  }
+  
+  return tree
+}
+
 export function renderTree(
   files: string[],
   opts: Options,
   broadRoot: boolean,
   changedSet?: Set<string>,
-  isGenerated?: (rel: string) => boolean
+  isGenerated?: (rel: string) => boolean,
+  cachedTree?: TreeNode
 ): string {
-  const tree = buildTree(files, isGenerated)
+  const tree = cachedTree ?? buildTree(files, isGenerated)
   
   const lines: string[] = []
   let count = 0
@@ -100,9 +298,10 @@ export function renderJson(
   opts: Options,
   broadRoot: boolean,
   stats?: { summaries: number; walks: number; files: number },
-  isGenerated?: (rel: string) => boolean
+  isGenerated?: (rel: string) => boolean,
+  cachedTree?: TreeNode
 ): string {
-  const tree = buildTree(files, isGenerated)
+  const tree = cachedTree ?? buildTree(files, isGenerated)
   
   const notes: Record<string, any> = {}
   for (const rel of files) {
