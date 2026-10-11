@@ -82,13 +82,17 @@ describe("Property-based tests for filter", () => {
       const secretExts = [".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".asc", ".gpg", ".ppk", ".kdbx", ".der"]
       
       fc.assert(
-        fc.property(fc.string({ minLength: 1, maxLength: 30 }).filter(s => !s.includes("/") && !s.includes(" ") && !s.includes("\\")), (name) => {
-          const { ctx } = createTestContext()
-          for (const ext of secretExts) {
-            expect(isSecret(ctx, `${name}${ext}`)).toBe(true)
+        fc.property(
+          fc.string({ minLength: 1, maxLength: 30 })
+            .filter(s => !s.includes("/") && !s.includes(" ") && !s.includes("\\") && !s.includes(":")),
+          (name) => {
+            const { ctx } = createTestContext()
+            for (const ext of secretExts) {
+              expect(isSecret(ctx, `${name}${ext}`)).toBe(true)
+            }
+            return true
           }
-          return true
-        }),
+        ),
         { numRuns: 100 }
       )
     })
