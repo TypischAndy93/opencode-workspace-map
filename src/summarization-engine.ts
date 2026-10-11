@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { extOf, getFallbackChain, DEFAULT_OPTIONS, SECRET_EXT, SECRET_STEM, SECRET_STEM_EXT, BINARY_EXT, CODE_EXT, DATA_EXT, entryPrefix } from "./config/index.js"
 import { outlineSummarize, modelSummary, lspSummarize } from "./summarizers/index.js"
-import { saveEntry, pruneCache } from "./storage/cache.js"
+import { saveEntry, pruneCache, scheduleBatchWrite, flushPendingWrites } from "./storage/cache.js"
 import { createSemaphore } from "./utils/semaphore.js"
 import { PriorityQueue, SummarizationPriority } from "./utils/priority-queue.js"
 
@@ -34,6 +34,10 @@ export function createSummarizationEngine(
   
   // Cost tracking
   let costLogTimer: ReturnType<typeof setTimeout> | undefined
+  
+  // LSP Response Caching
+  const lspCache = new Map<string, { symbols: Array<{ name: string; kind?: string }>; imports: string[]; sections?: SummarySections; at: number; mtime: number; size: number }>()
+  const lspCacheTtlMs = opts.lspCacheTtlMs ?? 300_000 // 5 minutes default
   
   function trackCost(kind: SummarizerKind, inputTokens: number, outputTokens: number): void {
     if (!opts.costTracking?.enabled) return
@@ -122,7 +126,7 @@ export function createSummarizationEngine(
       cleanupReverseDeps(rel)
       stats.skippedByRule++
       stats.skippedSummaries++
-      await saveEntry(api, locKey, {
+      await scheduleBatchWrite(api, locKey, {
         rel,
         size: st.size,
         mtimeMs: st.mtimeMs,
@@ -139,7 +143,7 @@ export function createSummarizationEngine(
     if (filterCtx.isGenerated(rel)) {
       cleanupReverseDeps(rel)
       stats.skippedSummaries++
-      await saveEntry(api, locKey, {
+      await scheduleBatchWrite(api, locKey, {
         rel,
         size: st.size,
         mtimeMs: st.mtimeMs,
@@ -161,7 +165,7 @@ export function createSummarizationEngine(
     if (content.includes("\u0000")) {
       cleanupReverseDeps(rel)
       stats.skippedSummaries++
-      await saveEntry(api, locKey, {
+      await scheduleBatchWrite(api, locKey, {
         rel,
         size: st.size,
         mtimeMs: st.mtimeMs,
@@ -194,7 +198,34 @@ export function createSummarizationEngine(
           }
         }
       } else if (summarizer === "lsp") {
-        m = await lspSummarize(rel, content, api, opts, stats, log)
+        // Check LSP cache first
+        const cacheKey = `${rel}:${st.mtimeMs}:${st.size}`
+        const cached = lspCache.get(cacheKey)
+        if (cached && Date.now() - cached.at < lspCacheTtlMs) {
+          // Cache hit - use cached LSP results
+          m = {
+            summary: "", // Will be generated from symbols/imports
+            symbols: cached.symbols,
+            imports: cached.imports,
+            sections: cached.sections,
+          }
+          log(`lsp cache hit: ${rel}`)
+        } else {
+          // Cache miss - call LSP
+          m = await lspSummarize(rel, content, api, opts, stats, log)
+          if (m) {
+            // Store in cache
+            lspCache.set(cacheKey, {
+              symbols: m.symbols,
+              imports: m.imports,
+              sections: m.sections,
+              at: Date.now(),
+              mtime: st.mtimeMs,
+              size: st.size,
+            })
+            log(`lsp cache miss (stored): ${rel}`)
+          }
+        }
       } else if (summarizer === "outline") {
         m = await outlineSummarize(rel, content, opts, stats)
       }
@@ -248,7 +279,7 @@ export function createSummarizationEngine(
       }
     }
 
-    await saveEntry(api, locKey, {
+    await scheduleBatchWrite(api, locKey, {
       rel,
       size: st.size,
       mtimeMs: st.mtimeMs,

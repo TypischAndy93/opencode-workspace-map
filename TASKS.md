@@ -56,14 +56,14 @@
 ## ⚡ P2 - Performance & Reliability
 
 ### 7. LSP Response Caching
-- [ ] Add `lspCache: Map<string, { symbols, imports, at }>` in summarization engine
-- [ ] Cache key: file path + mtime + size
-- [ ] TTL configurable via `opts.lspCacheTtlMs`
+- [x] Add `lspCache: Map<string, { symbols, imports, at }>` in summarization engine
+- [x] Cache key: file path + mtime + size
+- [x] TTL configurable via `opts.lspCacheTtlMs`
 
 ### 8. Batch Storage Writes
-- [ ] Accumulate pending cache writes in memory
-- [ ] Flush interval via `opts.cacheFlushIntervalMs` (default 5s)
-- [ ] Flush on shutdown
+- [x] Accumulate pending cache writes in memory
+- [x] Flush interval via `opts.cacheFlushIntervalMs` (default 5s)
+- [x] Flush on shutdown
 
 ### 9. Adaptive Walk Concurrency
 - [ ] Monitor walk duration vs file count

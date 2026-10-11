@@ -170,6 +170,125 @@ export async function saveEntry(
   }
 }
 
+// Batch storage writes for better performance
+interface PendingWrite {
+  entry: FileEntry
+  resolve: () => void
+  reject: (err: Error) => void
+}
+
+let pendingWrites: PendingWrite[] = []
+let batchFlushTimer: ReturnType<typeof setTimeout> | null = null
+
+export function scheduleBatchWrite(
+  api: Context,
+  locKey: string,
+  entry: FileEntry,
+  cache: Map<string, FileEntry>,
+  opts: Options,
+  log: (...args: unknown[]) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    pendingWrites.push({ entry, resolve, reject })
+    
+    if (!batchFlushTimer) {
+      const flushInterval = opts.cacheFlushIntervalMs ?? 5000
+      batchFlushTimer = setTimeout(() => flushBatchWrites(api, locKey, cache, opts, log), flushInterval)
+    }
+  })
+}
+
+async function flushBatchWrites(
+  api: Context,
+  locKey: string,
+  cache: Map<string, FileEntry>,
+  opts: Options,
+  log: (...args: unknown[]) => void
+): Promise<void> {
+  batchFlushTimer = null
+  if (pendingWrites.length === 0) return
+  
+  const batch = [...pendingWrites]
+  pendingWrites = []
+  
+  // Process batch - add cache versions and compress
+  const entriesToWrite = await Promise.all(batch.map(async ({ entry }) => {
+    let entryWithVersion: FileEntry = {
+      ...entry,
+      cacheVersion: computeCacheVersion(entry),
+    }
+    
+    if (entryWithVersion.summary.length > COMPRESSION_THRESHOLD) {
+      try {
+        const compressed = await compressData(new TextEncoder().encode(entryWithVersion.summary))
+        entryWithVersion = {
+          ...entryWithVersion,
+          summary: Array.from(compressed) as any,
+          compressed: true,
+        }
+      } catch (err) {
+        log("compression failed", entry.rel, err)
+      }
+    }
+    
+    return { rel: entry.rel, entry: entryWithVersion }
+  }))
+  
+  // Update cache
+  for (const { rel, entry } of entriesToWrite) {
+    cache.set(rel, entry)
+  }
+  
+  // LRU eviction
+  const maxCacheSize = opts.maxSummaries * 2
+  if (cache.size > maxCacheSize) {
+    const oldestKey = cache.keys().next().value
+    if (oldestKey) {
+      cache.delete(oldestKey)
+      try {
+        await api.storage.remove(`loc/${locKey}/file/` + oldestKey)
+      } catch { /* ignore */ }
+    }
+  }
+  
+  // Batch write to storage
+  try {
+    // Use Promise.all for concurrent writes
+    await Promise.all(
+      entriesToWrite.map(({ rel, entry }) => 
+        api.storage.set(`loc/${locKey}/file/` + rel, entry as any).catch(err => log("storage set failed", rel, err))
+      )
+    )
+    
+    // Resolve all pending promises
+    for (const { resolve } of batch) {
+      resolve()
+    }
+  } catch (err) {
+    log("batch storage write failed", err)
+    for (const { reject } of batch) {
+      reject(err as Error)
+    }
+  }
+}
+
+// Flush any pending writes on shutdown
+export async function flushPendingWrites(
+  api: Context,
+  locKey: string,
+  cache: Map<string, FileEntry>,
+  opts: Options,
+  log: (...args: unknown[]) => void
+): Promise<void> {
+  if (batchFlushTimer) {
+    clearTimeout(batchFlushTimer)
+    batchFlushTimer = null
+  }
+  if (pendingWrites.length > 0) {
+    await flushBatchWrites(api, locKey, cache, opts, log)
+  }
+}
+
 export async function pruneCache(
   api: Context,
   locKey: string,

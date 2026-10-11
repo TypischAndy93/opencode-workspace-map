@@ -35,6 +35,7 @@ import { createWorkspaceMapTool } from "./src/tool/index.js"
 import { registerWatchCommand } from "./src/cli/index.js"
 import { enqueue, setDisposed } from "./src/utils/enqueue.js"
 import { hash, locKey, entryPrefix, LEGACY_PREFIX } from "./src/utils/hash.js"
+import { flushPendingWrites } from "./src/storage/cache.js"
 
 import { initializePlugin, type PluginContext } from "./src/setup.js"
 import { createSummarizationEngine } from "./src/summarization-engine.js"
@@ -203,6 +204,7 @@ export default Plugin.define({
       if (pluginCtx.flushTimer) clearTimeout(pluginCtx.flushTimer)
       if (pluginCtx.costLogTimer) clearTimeout(pluginCtx.costLogTimer)
       summarizationEngine.stopCostLogging()
+      await flushPendingWrites(pluginCtx.api, pluginCtx.locKey, pluginCtx.cache, pluginCtx.opts, logFn)
       await shutdownMetrics()
     }
   },

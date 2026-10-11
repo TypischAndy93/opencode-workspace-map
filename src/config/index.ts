@@ -51,7 +51,7 @@ import { getChangedFiles } from "../fs/vcs.ts"
 
 import { outlineSummarize, modelSummary, lspSummarize } from "../summarizers/index.ts"
 
-import { loadCache, migrateLegacy, saveEntry, pruneCache } from "../storage/cache.ts"
+export { loadCache, migrateLegacy, saveEntry, pruneCache, scheduleBatchWrite, flushPendingWrites } from "../storage/cache.ts"
 
 import { buildFullMapping, buildDigest, buildInjectionRev } from "../injection/builder.ts"
 
