@@ -1,5 +1,9 @@
 # workspace-map
 
+[![CI](https://github.com/TypischAndy93/opencode-workspace-map/workflows/CI/badge.svg)](https://github.com/TypischAndy93/opencode-workspace-map/actions/workflows/ci.yml)
+[![Release](https://github.com/TypischAndy93/opencode-workspace-map/workflows/Release/badge.svg)](https://github.com/TypischAndy93/opencode-workspace-map/actions/workflows/release.yml)
+[![npm version](https://badge.fury.io/js/opencode-workspace-map.svg)](https://www.npmjs.com/package/opencode-workspace-map)
+
 An OpenCode plugin that keeps a live, cached map of the workspace — a directory
 tree plus per-file summaries — so the agent has structural awareness of
 multi-file repositories.
