@@ -12,14 +12,50 @@ export function leadingDoc(content: string): string | undefined {
   const lines = content.split(/\r?\n/).slice(0, 40)
   let block: string | undefined
   
-  if (lines[0]?.trimStart().startsWith("/**")) {
+  const firstLine = lines[0]?.trimStart() ?? ""
+  
+  // JSDoc/TSDoc style: /** ... */
+  if (firstLine.startsWith("/**")) {
     const buf: string[] = []
     for (const line of lines) {
       buf.push(line.replace(/^\s*\/?\*+\/?/, "").trim())
       if (line.includes("*/") && buf.length > 1) break
     }
     block = buf.filter(Boolean).join(" ")
-  } else {
+  }
+  // Python docstrings: """...""" or '''...''' (check first few lines)
+  else if (firstLine.startsWith('"""') || firstLine.startsWith("'''") || 
+           lines.slice(1, 5).some(l => l.trimStart().startsWith('"""') || l.trimStart().startsWith("'''"))) {
+    const quote = firstLine.startsWith('"""') || lines.slice(1,5).some(l => l.trimStart().startsWith('"""')) ? '"""' : "'''"
+    const buf: string[] = []
+    let foundClosing = false
+    for (const line of lines) {
+      const trimmed = line.trimStart()
+      if (trimmed.startsWith(quote) && trimmed !== quote) {
+        // Single-line docstring: """docstring"""
+        const content = trimmed.slice(3, -3).trim()
+        if (content) buf.push(content)
+        foundClosing = true
+        break
+      } else if (trimmed.startsWith(quote)) {
+        // Opening quote, continue collecting
+        continue
+      } else if (trimmed.endsWith(quote)) {
+        // Closing quote
+        buf.push(trimmed.slice(0, -3).trim())
+        foundClosing = true
+        break
+      } else if (buf.length > 0 || trimmed.startsWith(quote)) {
+        // Inside docstring
+        buf.push(trimmed)
+      }
+    }
+    if (foundClosing || buf.length > 0) {
+      block = buf.filter(Boolean).join(" ")
+    }
+  }
+  // Hash/slash comments
+  else {
     const buf: string[] = []
     for (const line of lines) {
       const t = line.trimStart()

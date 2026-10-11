@@ -129,7 +129,8 @@ export function parseModelSummary(text: string): { summary: string; symbols: str
   for (const line of (text ?? "").split(/\r?\n/)) {
     const m = /^\s*symbols?\s*:\s*(.+)$/i.exec(line)
     if (m) {
-      for (const part of m[1].split(/[,\s]+/)) {
+      // Split on commas, semicolons, pipes, and whitespace
+      for (const part of m[1].split(/[,;|\s]+/)) {
         const s = part.replace(/[`'"]/g, "").trim()
         if (s && !symbols.includes(s)) symbols.push(s)
       }
