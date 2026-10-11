@@ -2,6 +2,7 @@ import type { Options, FileEntry, Stats, ProjectInfo } from "../config/index.ts"
 import type { Context } from "@opencode/plugin/promise/plugin"
 import { TOOL_NAME } from "../config/index.ts"
 import { renderTree, focusFiles, mapRev, renderReverseDeps, renderJson } from "../injection/render.ts"
+import { globToRegex } from "../fs/gitignore.ts"
 
 export async function buildFullMapping(
   api: Context,
@@ -24,7 +25,24 @@ export async function buildFullMapping(
   const files = await listFiles(false)
   const changed = await getChangedFiles()
   const focus = focusFiles(files, changed, sessionID, recentBySession, recentGlobal)
-  const target = opts.inject === "full" ? files.slice(0, opts.maxSummaries) : focus.slice(0, opts.maxSummaries)
+  const useAllFiles = opts.injectAllFiles === true
+  
+  // Build target list with priority files
+  const priorityPatterns = opts.summaryPriority ?? []
+  const priorityFiles = new Set<string>()
+  for (const pattern of priorityPatterns) {
+    const regex = new RegExp("^" + globToRegex(pattern) + "$")
+    for (const f of files) {
+      if (regex.test(f)) priorityFiles.add(f)
+    }
+  }
+  
+  const baseTarget = useAllFiles 
+    ? files.slice(0, opts.maxSummaries) 
+    : (opts.inject === "full" ? files.slice(0, opts.maxSummaries) : focus.slice(0, opts.maxSummaries))
+  
+  // Ensure priority files are included (up to maxSummaries)
+  const target = [...priorityFiles, ...baseTarget.filter(f => !priorityFiles.has(f))].slice(0, opts.maxSummaries)
 
   // Refresh target notes synchronously so the injected map reflects reality
   // instead of "(indexing…)" — outline mode only. A model summarizer would
@@ -59,15 +77,29 @@ export async function buildFullMapping(
   const parts: string[] = [...header, "", renderTree(files, opts, broadRoot, new Set(changed), isGenerated, cachedTree)]
 
   if (target.length && opts.inject !== "tree") {
-    parts.push("", "## File notes")
-    for (const rel of target) {
-      const e = cache.get(rel)
-      parts.push(`- ${rel}: ${e?.summary ?? "(indexing…)"}`)
+    // Key Files section - show priority files with summaries
+    const keyFiles = target.filter(f => priorityFiles.has(f))
+    if (keyFiles.length > 0) {
+      parts.push("", "## Key Files")
+      for (const rel of keyFiles) {
+        const e = cache.get(rel)
+        parts.push(`- ${rel}: ${e?.summary ?? "(indexing…)"}`)
+      }
+    }
+    
+    // Other files
+    const otherFiles = target.filter(f => !priorityFiles.has(f))
+    if (otherFiles.length > 0) {
+      parts.push("", "## File notes")
+      for (const rel of otherFiles) {
+        const e = cache.get(rel)
+        parts.push(`- ${rel}: ${e?.summary ?? "(indexing…)"}`)
+      }
     }
   }
 
   if (opts.registerTool) {
-    parts.push("", `Use the ${TOOL_NAME} tool to inspect the full structure or fetch per-file summaries on demand.`)
+    parts.push("", `Use the ${TOOL_NAME} tool to explore:`, `  workspace_map({path: "src/summarizers"})  # explore a directory`, `  workspace_map({query: "modelSummary"})    # search by symbol/summary`, `  workspace_map({refresh: true})          # force re-scan`, `  workspace_map({format: "json"})       # get raw data`)
   }
 
   // Reverse dependencies section (markdown only)

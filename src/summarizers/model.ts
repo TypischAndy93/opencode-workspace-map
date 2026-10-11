@@ -50,17 +50,13 @@ export async function modelSummary(
   }
 }
 
-let modelRefCache: { providerID: string; id: string } | undefined
-
 async function getModelRef(api: Context, opts: Options): Promise<{ providerID: string; id: string } | undefined> {
   if (opts.summaryModel) return opts.summaryModel
-  if (modelRefCache) return modelRefCache
   try {
     const d: any = await api.model.default()
     const info = d?.data ?? d
     if (info?.providerID && (info.id || info.modelID)) {
-      modelRefCache = { providerID: info.providerID, id: info.id ?? info.modelID }
-      return modelRefCache
+      return { providerID: info.providerID, id: info.id ?? info.modelID }
     }
   } catch {
     /* ignore */

@@ -187,6 +187,9 @@ export default Plugin.define({
     // Tree cache for incremental updates (mutable tree with Map children)
     let treeCache: ReturnType<typeof createMutableNode> | null = null
 
+    // Track sessions that have completed their initial walk
+    const sessionsWithInitialWalk = new Set<string>()
+
     // Initialize metrics if enabled (after cache is declared)
     const metricsCollector = await initializeMetrics(opts)
     if (metricsCollector) {
@@ -613,6 +616,7 @@ export default Plugin.define({
         if (oldest === undefined) break
         recentBySession.delete(oldest)
         injectionState.delete(oldest)
+        sessionsWithInitialWalk.delete(oldest)
       }
       while (injectionState.size > 256) {
         const first = injectionState.keys().next().value
@@ -693,13 +697,28 @@ export default Plugin.define({
       const gitRepo = await detectGit()
       const needFresh = !filesCache.at || Date.now() - filesCache.at >= opts.treeTtlMs
       const changeSignal = dirty.size > 0 || changed.length > 0
-      const files = !needFresh || (gitRepo && !changeSignal && filesCache.at > 0) ? filesCache.files : await listFiles(false)
+      
+      // Force fresh walk for new sessions (first injection for this session)
+      const forceWalkNewSession = opts.forceWalkOnNewSession ?? true
+      const isNewSession = forceWalkNewSession && sessionID && !sessionsWithInitialWalk.has(sessionID)
+      const shouldWalk = needFresh || changeSignal || isNewSession || !gitRepo
+      
+      if (isNewSession) {
+        sessionsWithInitialWalk.add(sessionID)
+      }
+      
+      const files = shouldWalk ? await listFiles(false) : filesCache.files
       const rev = buildInjectionRev(files, changed, cache)
       const prev = injectionState.get(key)
       const sendFull =
         opts.injectStrategy === "always" ||
         !prev ||
         (opts.injectStrategy === "changed" && prev.rev !== rev)
+
+      // DEBUG LOG
+      if (opts.debug) {
+        console.error(`[workspace-map] getInjection: key=${key}, injectStrategy=${opts.injectStrategy}, sendFull=${sendFull}, prev=${prev ? "yes" : "no"}, rev=${rev}`)
+      }
 
       let text: string
       const injectionType = sendFull ? "full" : "digest"
@@ -767,10 +786,19 @@ export default Plugin.define({
     }
 
     if (opts.inject !== "off" && !broadRoot) {
+      if (opts.debug) console.error("[workspace-map] registering session.context hook")
       await api.session.hook("context", async (event: any) => {
+        const debugMsg = `[workspace-map] session.context hook called, sessionID: ${event?.sessionID}, hasSystem: ${!!event?.system}`
+        if (opts.debug) console.error(debugMsg)
         try {
           const text = await getInjection(event?.sessionID)
-          if (text) event.system.push({ type: "text", text })
+          const debugMsg2 = `[workspace-map] injection text length: ${text?.length}, preview: ${text?.slice(0, 100)}`
+          if (opts.debug) console.error(debugMsg2)
+          if (text) {
+            event.system.push({ type: "text", text })
+            const debugMsg3 = `[workspace-map] pushed to system, system length: ${event.system?.length}`
+            if (opts.debug) console.error(debugMsg3)
+          }
         } catch (err) {
           log("injection failed", err)
           if (metricsCollector) {

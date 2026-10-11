@@ -96,6 +96,9 @@ export interface Options {
   allowBroadRoot: boolean
   debounceMs: number
   treeTtlMs: number
+  forceWalkOnNewSession?: boolean
+  injectAllFiles?: boolean
+  summaryPriority?: string[]
   treeDepth: number
   maxTreeEntries: number
   maxInjectedChars: number
@@ -255,6 +258,9 @@ export const DEFAULT_OPTIONS: Options = {
   allowBroadRoot: false,
   debounceMs: 50,
   treeTtlMs: 10_000,
+  forceWalkOnNewSession: true,
+  injectAllFiles: false,
+  summaryPriority: [],
   treeDepth: 3,
   maxTreeEntries: 200,
   maxInjectedChars: 12_000,
