@@ -6,10 +6,11 @@ import { extOf, getFallbackChain, DEFAULT_OPTIONS, SECRET_EXT, SECRET_STEM, SECR
 import { outlineSummarize, modelSummary, lspSummarize } from "./summarizers/index.js"
 import { saveEntry, pruneCache } from "./storage/cache.js"
 import { createSemaphore } from "./utils/semaphore.js"
+import { PriorityQueue, SummarizationPriority } from "./utils/priority-queue.js"
 
 export interface SummarizationEngine {
   summarize(rel: string, force: boolean): Promise<void>
-  summarizeMany(rels: string[], force: boolean): Promise<void>
+  summarizeMany(rels: string[], force: boolean, priority?: SummarizationPriority): Promise<void>
   trackCost(kind: SummarizerKind, inputTokens: number, outputTokens: number): void
   startCostLogging(): void
   stopCostLogging(): void
@@ -265,12 +266,43 @@ export function createSummarizationEngine(
     }
   }
 
-  async function summarizeMany(rels: string[], force: boolean): Promise<void> {
+  // Priority queue for summarization jobs
+  const priorityQueue = new PriorityQueue(opts.summarizeConcurrency, () => {
+    log("Summarization queue drained")
+  })
+
+  // Set the execute function for the priority queue
+  priorityQueue.setExecuteFn(async (job) => {
+    await summarize(job.rel, job.force)
+  })
+
+  async function summarizeMany(rels: string[], force: boolean, priority: SummarizationPriority = "background"): Promise<void> {
     if (rels.length === 0) return
-    const semaphore = createSemaphore(opts.summarizeConcurrency)
-    await Promise.all(
-      rels.map((rel) => semaphore.acquire(() => summarize(rel, force))),
-    )
+    
+    const jobs = rels.map((rel) => ({
+      rel,
+      force,
+      priority,
+      timestamp: Date.now(),
+    }))
+    
+    priorityQueue.enqueueBatch(jobs)
+    
+    // Wait for all jobs to complete
+    await waitForQueueDrain(priorityQueue)
+  }
+
+  function waitForQueueDrain(queue: PriorityQueue): Promise<void> {
+    return new Promise((resolve) => {
+      const checkDrain = () => {
+        if (queue.isEmpty()) {
+          resolve()
+        } else {
+          setTimeout(checkDrain, 10)
+        }
+      }
+      checkDrain()
+    })
   }
 
   return {

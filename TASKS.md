@@ -47,9 +47,9 @@
 - [x] Remove 10+ parameter lists
 
 ### 6. Priority Queue for Summarization
-- [ ] Create `PriorityQueue` class with priority levels (changed > recent > warmup > background)
-- [ ] Integrate into `summarizeMany`
-- [ ] Add `priority` field to summarization jobs
+- [x] Create `PriorityQueue` class with priority levels (changed > recent > warmup > background)
+- [x] Integrate into `summarizeMany`
+- [x] Add `priority` field to summarization jobs
 
 ---
 
@@ -130,7 +130,7 @@
 | 3 | Config wizard CLI | 1.5 hours | ✅ Done |
 | 4 | Split index.ts modules | 3 hours | ✅ Done |
 | 5 | PluginContext for parameter drilling | 2 hours | ✅ Done |
-| 6 | Priority queue for summarization | 2 hours | ⬜ Todo |
+| 6 | Priority queue for summarization | 2 hours | ✅ Done |
 
 **Total estimated: ~10 hours**
 
