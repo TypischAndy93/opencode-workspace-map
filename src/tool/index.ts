@@ -4,15 +4,17 @@ import { renderTree, renderReverseDeps } from "../injection/render.ts"
 import { promises as fs } from "node:fs"
 import { createWriteStream } from "node:fs"
 import * as path from "node:path"
+import { VERSION } from "../version.ts"
 
 export function createWorkspaceMapTool(pluginCtx: PluginContext) {
   const { api, opts, root, locKey, cache, reverseDeps, stats, recentBySession, recentGlobal, listFiles, getChangedFilesCached, summarizeMany, project } = pluginCtx
   return {
     name: TOOL_NAME,
     description:
-      "CODE MODE TOOL — use via: await tools.workspace_map({ path, query, refresh, limit, format, action }) inside an execute block. " +
-      "NOT a direct assistant tool. Returns workspace tree + per-file summaries (outline default, zero model cost). " +
+      "Returns workspace tree + per-file summaries (outline default, zero model cost). " +
+      "Call directly as workspace_map({ path, query, refresh, limit, format, action }). " +
       "Accepts: path (limit to dir/file), query (filter by path, summary, or symbols), limit (cap), format (map|json), refresh (re-scan), action (map|stats|export).",
+    options: { codemode: false },
     input: {
       type: "object",
       properties: {
@@ -32,7 +34,7 @@ export function createWorkspaceMapTool(pluginCtx: PluginContext) {
           stats.sessions = recentBySession.size
           return {
             content: JSON.stringify(
-              { version: "0.4.0", root, broadRoot: false, locationKey: locKey, cachedEntries: cache.size, ...stats, monorepo: project.isMonorepo ? { type: project.monorepoType, packages: project.packages.map((p: MonorepoPackage) => ({ name: p.name, path: p.path, language: p.language })) } : null },
+              { version: VERSION, root, broadRoot: false, locationKey: locKey, cachedEntries: cache.size, ...stats, monorepo: project.isMonorepo ? { type: project.monorepoType, packages: project.packages.map((p: MonorepoPackage) => ({ name: p.name, path: p.path, language: p.language })) } : null },
               null,
               2,
             ),
@@ -128,14 +130,14 @@ export function createWorkspaceMapTool(pluginCtx: PluginContext) {
           }
           return {
             content: JSON.stringify(
-              { version: "0.4.0", root, broadRoot: false, locationKey: locKey, total: matched.length, changed, files: shown, notes, stats: { ...stats, sessions: recentBySession.size }, monorepo: project.isMonorepo ? { type: project.monorepoType, packages: project.packages.map((p: MonorepoPackage) => ({ name: p.name, path: p.path, language: p.language })) } : null },
+              { version: VERSION, root, broadRoot: false, locationKey: locKey, total: matched.length, changed, files: shown, notes, stats: { ...stats, sessions: recentBySession.size }, monorepo: project.isMonorepo ? { type: project.monorepoType, packages: project.packages.map((p: MonorepoPackage) => ({ name: p.name, path: p.path, language: p.language })) } : null },
               null,
               2,
             ),
           }
         }
         const out: string[] = [
-          `# Workspace map (v0.4.0)`,
+          `# Workspace map (v${VERSION})`,
           `Root: ${root}`,
           `${matched.length} matching file${matched.length === 1 ? "" : "s"}`,
           "",

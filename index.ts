@@ -25,17 +25,13 @@
 
 import { Plugin } from "@opencode/plugin"
 import type { Context, Cleanup } from "@opencode/plugin/promise/plugin"
-import { promises as fs } from "node:fs"
-import * as path from "node:path"
-import * as os from "node:os"
-import { createHash } from "node:crypto"
 
-import { initializeMetrics, shutdownMetrics } from "./src/metrics/index.js"
+import { shutdownMetrics } from "./src/metrics/index.js"
 import { createWorkspaceMapTool } from "./src/tool/index.js"
 import { registerWatchCommand } from "./src/cli/index.js"
-import { enqueue, setDisposed } from "./src/utils/enqueue.js"
-import { hash, locKey, entryPrefix, LEGACY_PREFIX } from "./src/utils/hash.js"
+import { setDisposed } from "./src/utils/enqueue.js"
 import { flushPendingWrites } from "./src/storage/cache.js"
+import { VERSION } from "./src/version.js"
 
 import { initializePlugin, type PluginContext } from "./src/setup.js"
 import { createSummarizationEngine } from "./src/summarization-engine.js"
@@ -44,8 +40,6 @@ import { createSessionManager } from "./src/session-manager.js"
 import { createVCSIntegration } from "./src/vcs-integration.js"
 import { createHooksManager } from "./src/hooks.js"
 import { createWatchManager } from "./src/watch-manager.js"
-
-const VERSION = "0.4.0"
 
 export default Plugin.define({
   id: "workspace-map",
@@ -135,9 +129,6 @@ export default Plugin.define({
 
     // Register tool EARLY (synchronously) so agent sees it immediately
     if (pluginCtx.opts.registerTool) {
-      const regMsg = "registering workspace_map tool (early)"
-      console.error(regMsg)
-      ;(async () => { try { await fs.appendFile(path.join(os.tmpdir(), "wm-setup.log"), regMsg + "\n") } catch {} })()
       await pluginCtx.api.tool.transform((editor: any) => {
         editor.add(createWorkspaceMapTool(pluginCtx))
       })

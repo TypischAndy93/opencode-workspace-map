@@ -3,6 +3,7 @@ import { MeterProvider, PeriodicExportingMetricReader, ConsoleMetricExporter } f
 import { resourceFromAttributes } from "@opentelemetry/resources"
 import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions"
 import type { Options } from "../config/index.ts"
+import { VERSION } from "../version.ts"
 
 /**
  * OpenTelemetry metrics for workspace-map plugin observability.
@@ -33,7 +34,7 @@ export class MetricsCollector {
 
   constructor(opts: Options) {
     this.enabled = opts.metrics?.enabled ?? false
-    this.meter = metrics.getMeter("workspace-map", "0.4.0")
+    this.meter = metrics.getMeter("workspace-map", VERSION)
   }
 
   async initialize(): Promise<void> {
@@ -53,7 +54,7 @@ export class MetricsCollector {
 
     const resource = resourceFromAttributes({
         [SemanticResourceAttributes.SERVICE_NAME]: "workspace-map",
-        [SemanticResourceAttributes.SERVICE_VERSION]: "0.4.0",
+        [SemanticResourceAttributes.SERVICE_VERSION]: VERSION,
       })
 
     this.meterProvider = new MeterProvider({

@@ -8,6 +8,7 @@ import { locKey } from "../utils/hash.ts"
 import { createWatchManager } from "../watch-manager.ts"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
+import { VERSION } from "../version.ts"
 
 export interface CLICommandsContext {
   api: Context
@@ -217,7 +218,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         
         if (input.format === "json") {
           const result = {
-            version: "0.4.0",
+            version: VERSION,
             cache: {
               entries: cacheEntries,
               sizeBytes: cacheSizeBytes,
@@ -278,7 +279,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
           return { content: JSON.stringify(result) }
         } else {
           const text = [
-            `Workspace Map Statistics (v0.4.0)`,
+            `Workspace Map Statistics (v${VERSION})`,
             `=================================`,
             ``,
             `Cache:`,

@@ -22,21 +22,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: '22'
-          cache: 'npm'
-          registry-url: 'https://registry.npmjs.org'
+          bun-version: latest
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install
 
       - name: Run tests
         run: |
-          npm run typecheck
-          npx vitest run
-          npm test
+          bun run typecheck
+          bunx vitest run
+          bun test/run-tests.mjs
 
       - name: Configure Git
         run: |
@@ -44,13 +42,19 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Run release script
-        run: npm run release:${{ github.event.inputs.version }}
+        run: bun run release:${{ github.event.inputs.version }}
 
       - name: Push changes and tags
         run: |
           git push origin HEAD --tags
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Publish to npm
         if: github.event.inputs.version != 'prerelease'

@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url"
 import assert from "node:assert/strict"
 
 const PLUGIN_DIR = path.dirname(import.meta.dir)
+const PKG_VERSION = JSON.parse(await fs.readFile(path.join(PLUGIN_DIR, "package.json"), "utf8")).version
 const FIX = path.join(os.tmpdir(), `wm-fix-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
 
 let passed = 0
@@ -180,7 +181,7 @@ async function main() {
 
     const stats1 = JSON.parse((await tool.execute({ action: "stats" }, {})).content)
     await test("stats: version + scope + new counters", () => {
-      assert.equal(stats1.version, "0.4.0")
+      assert.equal(stats1.version, PKG_VERSION)
       assert.ok(stats1.locationKey?.length === 12)
       assert.equal(stats1.broadRoot, false)
       assert.ok(stats1.walks >= 1, "no walk recorded")
@@ -297,7 +298,7 @@ async function main() {
     // ---- v0.3.0: format json + limit ----
     const jsonRes = JSON.parse((await tool.execute({ format: "json" }, {})).content)
     await test("format:json returns structured data", () => {
-      assert.equal(jsonRes.version, "0.4.0")
+      assert.equal(jsonRes.version, PKG_VERSION)
       assert.ok(Array.isArray(jsonRes.files) && jsonRes.files.length > 0)
       assert.ok(Array.isArray(jsonRes.changed), "changed list missing")
       assert.equal(typeof jsonRes.notes["src/helper.ts"]?.updatedAt, "number")

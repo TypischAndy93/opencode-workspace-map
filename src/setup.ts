@@ -1,6 +1,5 @@
 import type { Context, Cleanup } from "@opencode/plugin/promise/plugin"
 import type { Options, ProjectInfo, Stats, FileEntry, SummarizerKind, LogFn } from "./config/index.ts"
-import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import * as os from "node:os"
 import { loadSidecarConfig, validateOptions, detectProject, autoTuneOptions, detectOptimalWalkConcurrency, mergeOptions } from "./config/index.js"
@@ -13,8 +12,6 @@ import { setDisposed } from "./utils/enqueue.js"
 import { locKey, entryPrefix } from "./utils/hash.js"
 import { createSemaphore } from "./utils/semaphore.js"
 import { globToRegex } from "./fs/gitignore.js"
-
-const VERSION = "0.4.0"
 
 export interface PluginContext {
   api: Context
@@ -52,12 +49,6 @@ export interface PluginContext {
 }
 
 export async function initializePlugin(api: Context): Promise<{ ctx: PluginContext; cleanup: Cleanup }> {
-  const startMsg = `[workspace-map] SETUP START ${JSON.stringify({ location: api.location?.directory, options: api.options })}`
-  console.error(startMsg)
-  try {
-    await fs.appendFile(path.join(os.tmpdir(), "wm-setup.log"), startMsg + "\n")
-  } catch {}
-
   const sidecar = await loadSidecarConfig()
   // Merge defaults + sidecar config + plugin options, ensuring DEFAULT_IGNORES
   // (node_modules, dist, build, coverage, vendor, …) is always applied.

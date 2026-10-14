@@ -133,29 +133,29 @@ object form of the `plugins` entry in `opencode.json` (if present):
 | `refreshOnWrite` | `true` | Re-summarize files changed by write/edit tools. |
 | `respectGitignore` | `true` | Honor the root `.gitignore`. |
 | `allowBroadRoot` | `false` | Allow warmup/injection even for home/filesystem roots. |
-| `debounceMs` | `750` | Debounce before re-summarizing after an edit. |
-| `treeTtlMs` | `15000` | How long a directory scan is cached. |
-| `treeDepth` | `5` | Max depth rendered in the tree. |
-| `maxTreeEntries` | `400` | Max entries rendered in the tree. |
+| `debounceMs` | `50` | Debounce before re-summarizing after an edit. |
+| `treeTtlMs` | `10000` | How long a directory scan is cached. |
+| `treeDepth` | `3` | Max depth rendered in the tree. |
+| `maxTreeEntries` | `200` | Max entries rendered in the tree. |
 | `maxInjectedChars` | `12000` | Hard cap on injected characters. |
-| `maxSummaries` | `40` | Max file notes included/returned. |
-| `maxFiles` | `4000` | Max files walked before stopping. |
-| `maxFileBytes` | `524288` | Files larger than this are listed but not summarized. |
+| `maxSummaries` | `50` | Max file notes included/returned. |
+| `maxFiles` | `3000` | Max files walked before stopping. |
+| `maxFileBytes` | `500000` | Files larger than this are listed but not summarized. |
 | `maxFileBytesByExt` | `{}` | Per-extension overrides (e.g., `{".min.js": 2097152}` for larger generated files). |
-| `warmupSummaries` | `25` | Files summarized in the background at startup. |
+| `warmupSummaries` | `20` | Files summarized in the background at startup. |
 | `ignore` | common dirs | Extra directory/file names or glob patterns to skip at any depth (appended to built-in). |
 | `ignoreExtra` | `[]` | Additional directory/file names or glob patterns to skip at any depth. |
 | `include` | `[]` | Glob patterns to force-include files that would otherwise be skipped. |
-| `walkConcurrency` | `4` | Max concurrent directory walks (parallel I/O). |
+| `walkConcurrency` | `"auto"` | Max concurrent directory walks (`"auto"` = derived from CPU count, or a number). |
 | `summarizeConcurrency` | `4` | Max concurrent file summarizations. |
 | `summaryLength` | `"medium"` | Model summary length: `"short"` (1 sentence), `"medium"` (2-3), `"long"` (4-5). |
 | `autoTune` | `true` | Auto-detect project type (monorepo, language, framework) and tune options. |
 | `exportJsonl` | `false` | Enable JSONL export of summaries via `workspace_map` tool (`action: "export"`). |
 | `exportJsonlPath` | `.opencode/workspace-map.jsonl` | Output path for JSONL export (relative to workspace root). |
-| `lspTimeoutMs` | `5000` | LSP request timeout in milliseconds. |
-| `lspMaxSymbols` | `50` | Max symbols to fetch from LSP per file. |
+| `lspTimeoutMs` | `10000` | LSP request timeout in milliseconds. |
+| `lspMaxSymbols` | `500` | Max symbols to fetch from LSP per file. |
 | `indexDotDirs` | `[".github", ".opencode", ".vscode", ".devcontainer", ".gitlab"]` | Dot-directories to index (override allowlist). |
-| `watchEnabled` | `false` | Enable fs.watch-based real-time updates (complements `refreshOnWrite`). |
+| `watchEnabled` | `true` | Enable fs.watch-based real-time updates (complements `refreshOnWrite`). |
 | `debug` | `false` | Log to stderr. |
 
 ## Cost notes

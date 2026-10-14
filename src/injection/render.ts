@@ -1,5 +1,6 @@
 import type { Options, FileEntry } from "../config/index.ts"
 import { createHash } from "node:crypto"
+import { VERSION } from "../version.ts"
 
 export interface TreeNode {
   name: string
@@ -322,7 +323,7 @@ export function renderJson(
   }
 
   const output = {
-    version: "0.4.0",
+    version: VERSION,
     root: "",
     broadRoot,
     totalFiles: files.length,
