@@ -327,11 +327,17 @@ async function main() {
     await fs.mkdir(path.join(WS2, "src"), { recursive: true })
     await fs.writeFile(path.join(WS2, "src", "same.ts"), "export const two = 2\n")
     await test("scoped storage: both locations cached without collision", async () => {
-      const env2 = makeCtx({ directory: WS2, storage, options: { warmupSummaries: 0, debounceMs: 30 } })
+      const env2 = makeCtx({ directory: WS2, storage, options: { warmupSummaries: 0, debounceMs: 30, cacheFlushIntervalMs: 25 } })
       const cleanup2 = await plugin.setup(env2.ctx)
       cleanups.push(cleanup2)
       const tool2 = env2.tools.find((t) => t.name === "workspace_map")
       await tool2.execute({ refresh: true }, { progress: async () => {} })
+      // Storage persistence is batched; wait until both locations have flushed.
+      for (let i = 0; i < 140; i++) {
+        const cur = [...storage._m.keys()]
+        if (cur.some((k) => k.includes("/file/src/index.ts")) && cur.some((k) => k.includes("/file/src/same.ts"))) break
+        await new Promise((r) => setTimeout(r, 50))
+      }
       const keys = [...storage._m.keys()]
       const scope1 = keys.find((k) => k.includes("/file/src/index.ts"))
       const scope2 = keys.find((k) => k.includes("/file/src/same.ts"))
@@ -461,14 +467,16 @@ async function main() {
     })
 
     console.log(`\n${passed} passed, ${failed} failed`)
-    if (failed) process.exit(1)
+    process.exitCode = failed ? 1 : 0
   } finally {
     for (const c of cleanups.reverse()) await c?.()
     await fs.rm(FIX, { recursive: true, force: true })
   }
 }
 
-main().catch((err) => {
-  console.error("harness crashed:", err)
-  process.exit(2)
-})
+main()
+  .then(() => process.exit(process.exitCode ?? 0))
+  .catch((err) => {
+    console.error("harness crashed:", err)
+    process.exit(2)
+  })

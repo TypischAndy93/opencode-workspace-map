@@ -3,7 +3,7 @@ import type { Options, ProjectInfo, Stats, FileEntry, SummarizerKind, LogFn } fr
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import * as os from "node:os"
-import { loadSidecarConfig, validateOptions, detectProject, autoTuneOptions, detectOptimalWalkConcurrency, DEFAULT_OPTIONS } from "./config/index.js"
+import { loadSidecarConfig, validateOptions, detectProject, autoTuneOptions, detectOptimalWalkConcurrency, mergeOptions } from "./config/index.js"
 import { initializeMetrics, shutdownMetrics, getMetricsCollector } from "./metrics/index.js"
 import { createFilterContext } from "./fs/filter.js"
 import { loadCache, migrateLegacy } from "./storage/cache.js"
@@ -59,14 +59,9 @@ export async function initializePlugin(api: Context): Promise<{ ctx: PluginConte
   } catch {}
 
   const sidecar = await loadSidecarConfig()
-  const opts: Options = {
-    ...DEFAULT_OPTIONS,
-    ...sidecar,
-    ...((api.options as Partial<Options>) ?? {}),
-    ignore: [...DEFAULT_OPTIONS.ignore, ...((sidecar.ignore as string[]) ?? []), ...((api.options as any)?.ignore ?? [])],
-    ignoreExtra: [...((sidecar.ignoreExtra as string[]) ?? []), ...((api.options as any)?.ignoreExtra ?? [])],
-    include: [...((sidecar.include as string[]) ?? []), ...((api.options as any)?.include ?? [])],
-  }
+  // Merge defaults + sidecar config + plugin options, ensuring DEFAULT_IGNORES
+  // (node_modules, dist, build, coverage, vendor, …) is always applied.
+  const opts: Options = mergeOptions(sidecar, api.options as Partial<Options> | undefined)
 
   const root: string = path.resolve(api.location?.directory ?? api.location?.project?.directory ?? process.cwd())
 

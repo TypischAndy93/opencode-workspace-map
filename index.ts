@@ -116,6 +116,7 @@ export default Plugin.define({
 
     // Create flush callback for session manager
     const flushCallback = async (rels: string[]) => {
+      pluginCtx.stats.dirtyFlushes++
       for (const r of rels) await summarizationEngine.summarize(r, true)
       pluginCtx.filesCache.at = 0
     }

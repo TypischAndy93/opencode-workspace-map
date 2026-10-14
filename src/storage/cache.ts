@@ -170,15 +170,19 @@ export async function saveEntry(
   }
 }
 
-// Batch storage writes for better performance
+// Batch storage writes for better performance.
+// State is kept per location key so multiple plugin instances in one process
+// (e.g. different workspace roots) never flush into each other's cache/storage.
 interface PendingWrite {
   entry: FileEntry
-  resolve: () => void
-  reject: (err: Error) => void
 }
 
-let pendingWrites: PendingWrite[] = []
-let batchFlushTimer: ReturnType<typeof setTimeout> | null = null
+interface BatchState {
+  pending: PendingWrite[]
+  timer: ReturnType<typeof setTimeout> | null
+}
+
+const batchStates = new Map<string, BatchState>()
 
 export function scheduleBatchWrite(
   api: Context,
@@ -187,15 +191,23 @@ export function scheduleBatchWrite(
   cache: Map<string, FileEntry>,
   opts: Options,
   log: (...args: unknown[]) => void
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    pendingWrites.push({ entry, resolve, reject })
-    
-    if (!batchFlushTimer) {
-      const flushInterval = opts.cacheFlushIntervalMs ?? 5000
-      batchFlushTimer = setTimeout(() => flushBatchWrites(api, locKey, cache, opts, log), flushInterval)
-    }
-  })
+): void {
+  // Update the in-memory cache immediately so readers (injection revision,
+  // tool queries) observe fresh summaries without blocking on the batch flush.
+  // Only the storage persistence below is deferred.
+  cache.set(entry.rel, { ...entry, cacheVersion: computeCacheVersion(entry) })
+
+  let state = batchStates.get(locKey)
+  if (!state) {
+    state = { pending: [], timer: null }
+    batchStates.set(locKey, state)
+  }
+  state.pending.push({ entry })
+
+  if (!state.timer) {
+    const flushInterval = opts.cacheFlushIntervalMs ?? 5000
+    state.timer = setTimeout(() => { void flushBatchWrites(api, locKey, cache, opts, log) }, flushInterval)
+  }
 }
 
 async function flushBatchWrites(
@@ -205,11 +217,16 @@ async function flushBatchWrites(
   opts: Options,
   log: (...args: unknown[]) => void
 ): Promise<void> {
-  batchFlushTimer = null
-  if (pendingWrites.length === 0) return
+  const state = batchStates.get(locKey)
+  if (!state) return
+  if (state.timer) {
+    clearTimeout(state.timer)
+    state.timer = null
+  }
+  if (state.pending.length === 0) return
   
-  const batch = [...pendingWrites]
-  pendingWrites = []
+  const batch = [...state.pending]
+  state.pending = []
   
   // Process batch - add cache versions and compress
   const entriesToWrite = await Promise.all(batch.map(async ({ entry }) => {
@@ -234,7 +251,8 @@ async function flushBatchWrites(
     return { rel: entry.rel, entry: entryWithVersion }
   }))
   
-  // Update cache
+  // Update cache (entries appear in scheduling order, so an entry
+  // re-summarized within the window overwrites with the newest version).
   for (const { rel, entry } of entriesToWrite) {
     cache.set(rel, entry)
   }
@@ -259,16 +277,8 @@ async function flushBatchWrites(
         api.storage.set(`loc/${locKey}/file/` + rel, entry as any).catch(err => log("storage set failed", rel, err))
       )
     )
-    
-    // Resolve all pending promises
-    for (const { resolve } of batch) {
-      resolve()
-    }
   } catch (err) {
     log("batch storage write failed", err)
-    for (const { reject } of batch) {
-      reject(err as Error)
-    }
   }
 }
 
@@ -280,11 +290,12 @@ export async function flushPendingWrites(
   opts: Options,
   log: (...args: unknown[]) => void
 ): Promise<void> {
-  if (batchFlushTimer) {
-    clearTimeout(batchFlushTimer)
-    batchFlushTimer = null
+  const state = batchStates.get(locKey)
+  if (state?.timer) {
+    clearTimeout(state.timer)
+    state.timer = null
   }
-  if (pendingWrites.length > 0) {
+  if (state && state.pending.length > 0) {
     await flushBatchWrites(api, locKey, cache, opts, log)
   }
 }

@@ -195,19 +195,20 @@ describe("Property-based tests for gitignore", () => {
     })
 
     it("should handle multiple negations correctly", () => {
+      // Use simple lowercase alphanumeric names so patterns/paths stay literal
+      // (no glob metachars, whitespace, newlines, or separators) and require the
+      // three names to be pairwise distinct: otherwise the "ignored" expectations
+      // are contradictory (e.g. if p1 === p2 then p1 is negated and not ignored).
+      const safeName = fc.string({ minLength: 1, maxLength: 12 }).filter(s => /^[a-z0-9]+$/.test(s))
       fc.assert(
         fc.property(
-          fc.string({ minLength: 1, maxLength: 20 }).filter(s => !s.includes("/") && !s.includes(" ") && !s.includes("!") && !s.includes("#")),
-          fc.string({ minLength: 1, maxLength: 20 }).filter(s => !s.includes("/") && !s.includes(" ") && !s.includes("!") && !s.includes("#")),
-          fc.string({ minLength: 1, maxLength: 20 }).filter(s => !s.includes("/") && !s.includes(" ") && !s.includes("!") && !s.includes("#")),
-          (p1, p2, p3) => {
+          fc.uniqueArray(safeName, { minLength: 3, maxLength: 3 }),
+          (names) => {
+            const [p1, p2, p3] = names
             // p1 ignored, p2 allowed, p3 ignored again
             const content = `${p1}\n!${p2}\n${p3}`
             const rules = compileGitignore(content)
             
-            // p1 should be ignored (unless it's p2 or p3)
-            // p2 should NOT be ignored (negated)
-            // p3 should be ignored
             expect(gitignored(rules, p1)).toBe(true)
             expect(gitignored(rules, p2)).toBe(false)
             expect(gitignored(rules, p3)).toBe(true)
