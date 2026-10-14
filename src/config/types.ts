@@ -127,10 +127,16 @@ export interface Options {
   lspCacheTtlMs?: number
   indexDotDirs?: string[]
   watchEnabled?: boolean
+  watchPattern?: string
   watch?: {
     debounceMs?: number
     batchChanges?: boolean
     batchTimeoutMs?: number
+    smartDebounce?: boolean
+    minDebounceMs?: number
+    maxDebounceMs?: number
+    debounceStrategy?: "fixed" | "adaptive" | "coalesce"
+    coalesceWindowMs?: number
   }
   includeReverseDeps?: boolean
   injectionFormat?: "markdown" | "json" | "both"
@@ -345,6 +351,11 @@ export const DEFAULT_OPTIONS: Options = {
     debounceMs: 500,
     batchChanges: true,
     batchTimeoutMs: 100,
+    smartDebounce: false,
+    minDebounceMs: 50,
+    maxDebounceMs: 2000,
+    debounceStrategy: "fixed",
+    coalesceWindowMs: 300,
   },
   // Generated file detection
   autoDetectGenerated: true,

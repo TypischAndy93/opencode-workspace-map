@@ -43,6 +43,7 @@ import { createInjectionEngine } from "./src/injection-engine.js"
 import { createSessionManager } from "./src/session-manager.js"
 import { createVCSIntegration } from "./src/vcs-integration.js"
 import { createHooksManager } from "./src/hooks.js"
+import { createWatchManager } from "./src/watch-manager.js"
 
 const VERSION = "0.4.0"
 
@@ -192,6 +193,24 @@ export default Plugin.define({
       pluginCtx.metricsCollector
     )
 
+    // Start file watch manager if enabled
+    let watchManager: ReturnType<typeof createWatchManager> | null = null
+    if (pluginCtx.opts.watchEnabled) {
+      watchManager = createWatchManager(
+        {
+          root: pluginCtx.root,
+          cache: pluginCtx.cache,
+          reverseDeps: pluginCtx.reverseDeps,
+          listFiles: injectionEngine.listFiles,
+          summarizeMany: summarizationEngine.summarizeMany,
+          log: logFn,
+          metricsCollector: pluginCtx.metricsCollector,
+        },
+        pluginCtx.opts
+      )
+      await watchManager.start()
+    }
+
     // Start cost logging
     summarizationEngine.startCostLogging()
 
@@ -203,6 +222,7 @@ export default Plugin.define({
       setDisposed(true)
       if (pluginCtx.flushTimer) clearTimeout(pluginCtx.flushTimer)
       if (pluginCtx.costLogTimer) clearTimeout(pluginCtx.costLogTimer)
+      if (watchManager) watchManager.stop()
       summarizationEngine.stopCostLogging()
       injectionEngine.cleanup()
       await flushPendingWrites(pluginCtx.api, pluginCtx.locKey, pluginCtx.cache, pluginCtx.opts, logFn)

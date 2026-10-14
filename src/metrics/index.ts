@@ -20,6 +20,7 @@ export class MetricsCollector {
   private cacheMisses: ReturnType<Meter["createCounter"]> | null = null
   private injections: ReturnType<Meter["createCounter"]> | null = null
   private errors: ReturnType<Meter["createCounter"]> | null = null
+  private watchBatches: ReturnType<Meter["createCounter"]> | null = null
 
   // Histograms
   private walkDuration: ReturnType<Meter["createHistogram"]> | null = null
@@ -110,6 +111,11 @@ export class MetricsCollector {
       unit: "{error}",
     })
 
+    this.watchBatches = this.meter.createCounter("workspace_map.watch_batches", {
+      description: "Number of watch change batches processed",
+      unit: "{batch}",
+    })
+
     // Histograms
     this.walkDuration = this.meter.createHistogram("workspace_map.walk_duration", {
       description: "Duration of filesystem walk operations",
@@ -171,6 +177,11 @@ export class MetricsCollector {
   recordError(type: string): void {
     if (!this.enabled) return
     this.errors?.add(1, { type })
+  }
+
+  recordWatchBatch(fileCount: number): void {
+    if (!this.enabled) return
+    this.watchBatches?.add(fileCount)
   }
 
   setCacheSize(size: number): void {

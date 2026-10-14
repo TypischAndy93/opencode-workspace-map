@@ -3,18 +3,11 @@ import type { Context } from "@opencode/plugin/promise/plugin"
 import { TOOL_NAME } from "../config/index.ts"
 import { renderTree, renderJson, buildTree, convertToImmutable, createMutableNode, addPathToMutableNode } from "../injection/render.ts"
 import { createFilterContext, walk } from "../fs/filter.ts"
-import { globToRegex } from "../fs/gitignore.ts"
 import { buildFullMapping, buildDigest, buildInjectionRev } from "../injection/builder.ts"
 import { locKey } from "../utils/hash.ts"
+import { createWatchManager } from "../watch-manager.ts"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-
-export interface WatchOptions {
-  root: string
-  debounceMs: number
-  onChange?: (files: string[]) => void
-  pattern?: RegExp
-}
 
 export interface CLICommandsContext {
   api: Context
@@ -34,195 +27,6 @@ export interface CLICommandsContext {
   vcsCache: { at: number; files: string[] }
   filterCtx: ReturnType<typeof createFilterContext>
   treeCache: ReturnType<typeof createMutableNode> | null
-}
-
-export async function startWatch(
-  api: Context,
-  opts: Options,
-  root: string,
-  cache: Map<string, FileEntry>,
-  stats: Stats,
-  reverseDeps: Map<string, Set<string>>,
-  listFiles: (force: boolean) => Promise<string[]>,
-  summarizeMany: (rels: string[], force: boolean) => Promise<void>,
-  log: (...args: unknown[]) => void,
-  watchOptions: { debounceMs?: number; pattern?: string; once?: boolean } = {}
-): Promise<{ stop: () => void }> {
-  const { watch } = await import("node:fs")
-  const { promises: fs } = await import("node:fs")
-  const { join } = await import("node:path")
-  
-  // Get watch config with defaults
-  const watchConfig = opts.watch ?? {}
-  const debounceMs = watchOptions.debounceMs ?? watchConfig.debounceMs ?? opts.debounceMs ?? 750
-  const batchChanges = watchConfig.batchChanges ?? true
-  const batchTimeoutMs = watchConfig.batchTimeoutMs ?? 100
-  const pattern = watchOptions.pattern ? new RegExp(globToRegex(watchOptions.pattern)) : null
-  const once = watchOptions.once ?? false
-  
-  const pending = new Map<string, NodeJS.Timeout>()
-  let batchTimer: NodeJS.Timeout | null = null
-  const pendingBatch = new Set<string>()
-  let disposed = false
-  let pollTimer: NodeJS.Timeout | null = null
-  let lastKnownFiles: Set<string> | null = null
-  
-  // Polling fallback interval (ms)
-  const POLL_INTERVAL = 5000
-
-  async function getCurrentFiles(): Promise<Set<string>> {
-    const files = await listFiles(true)
-    return new Set(files)
-  }
-
-  function flushBatch() {
-    if (batchTimer) {
-      clearTimeout(batchTimer)
-      batchTimer = null
-    }
-    if (pendingBatch.size === 0) return
-    
-    const batch = [...pendingBatch]
-    pendingBatch.clear()
-    
-    log(`batch summarizing ${batch.length} files: ${batch.join(", ")}`)
-    
-    // Summarize all files in batch
-    summarizeMany(batch, true).catch((err) => log("batch summarize failed", err))
-    
-    if (once) {
-      stop()
-      log("Watch completed (once mode)")
-    }
-  }
-
-  function scheduleBatch(rel: string) {
-    pendingBatch.add(rel)
-    
-    if (batchChanges) {
-      // Batch mode: collect changes and flush after batchTimeoutMs
-      if (!batchTimer) {
-        batchTimer = setTimeout(flushBatch, batchTimeoutMs)
-      }
-    } else {
-      // Non-batch mode: debounce individual files
-      const existing = pending.get(rel)
-      if (existing) clearTimeout(existing)
-      const timeout = setTimeout(async () => {
-        pending.delete(rel)
-        if (cache.has(rel)) {
-          log(`file changed: ${rel}`)
-          await summarizeMany([rel], true)
-        }
-        if (once) {
-          stop()
-          log("Watch completed (once mode)")
-        }
-      }, debounceMs)
-      pending.set(rel, timeout)
-    }
-  }
-
-  async function handleFileChange(rel: string, eventType: string) {
-    if (disposed) return
-    if (pattern && !pattern.test(rel)) return
-    
-    const absPath = join(root, rel)
-    
-    try {
-      // Check if file still exists
-      await fs.stat(absPath)
-      
-      // File exists - schedule for summarization
-      if (eventType === "change" || eventType === "rename") {
-        scheduleBatch(rel)
-      }
-    } catch (err: any) {
-      if (err.code === "ENOENT") {
-        // File was deleted - remove from cache and update tree
-        if (cache.delete(rel)) {
-          log(`file deleted: ${rel}`)
-          // Invalidate reverse deps
-          for (const [imported, importers] of reverseDeps.entries()) {
-            if (importers.has(rel)) {
-              importers.delete(rel)
-            }
-          }
-        }
-      }
-    }
-  }
-
-  const watcher = watch(root, { recursive: true }, async (eventType: string, filename: string | null) => {
-    if (!filename) return
-    if (eventType === "change" || eventType === "rename") {
-      const rel = filename
-      if (pattern && !pattern.test(rel)) return
-      await handleFileChange(rel, eventType)
-    }
-  })
-
-  // Polling fallback for reliability
-  async function startPolling() {
-    if (disposed) return
-    lastKnownFiles = await getCurrentFiles()
-    
-    pollTimer = setInterval(async () => {
-      if (disposed) return
-      
-      try {
-        const currentFiles = await getCurrentFiles()
-        
-        // Detect new files
-        for (const rel of currentFiles) {
-          if (!lastKnownFiles!.has(rel)) {
-            log(`new file detected via polling: ${rel}`)
-            scheduleBatch(rel)
-          }
-        }
-        
-        // Detect deleted files
-        for (const rel of lastKnownFiles!) {
-          if (!currentFiles.has(rel)) {
-            if (cache.delete(rel)) {
-              log(`deleted file detected via polling: ${rel}`)
-              for (const [imported, importers] of reverseDeps.entries()) {
-                if (importers.has(rel)) {
-                  importers.delete(rel)
-                }
-              }
-            }
-          }
-        }
-        
-        lastKnownFiles = currentFiles
-      } catch (err) {
-        log("polling error", err)
-      }
-    }, POLL_INTERVAL)
-  }
-
-  function stop() {
-    disposed = true
-    if (batchTimer) clearTimeout(batchTimer)
-    if (pollTimer) clearInterval(pollTimer!)
-    for (const timeout of pending.values()) clearTimeout(timeout)
-    pending.clear()
-    pendingBatch.clear()
-    watcher.close()
-    log("watch stopped")
-  }
-
-  // Start polling fallback
-  startPolling()
-
-  log(`watching ${root} for changes${pattern ? ` (pattern: ${pattern.source})` : ""}${once ? " (once mode)" : ""}${batchChanges ? " (batched)" : ""} + polling`)
-
-  return {
-    stop: () => {
-      stop()
-    }
-  }
 }
 
 export function registerWatchCommand(
@@ -252,22 +56,46 @@ export function registerWatchCommand(
           once: { type: "boolean", description: "Exit after processing the first change" },
           batchChanges: { type: "boolean", description: "Batch multiple file changes before re-summarizing (default: true)" },
           batchTimeoutMs: { type: "number", description: "Maximum time to wait for batching changes in milliseconds (default: 100ms)" },
+          smartDebounce: { type: "boolean", description: "Enable adaptive debouncing based on change frequency (default: false)" },
+          minDebounceMs: { type: "number", description: "Minimum debounce time when using smart debounce (default: 50ms)" },
+          maxDebounceMs: { type: "number", description: "Maximum debounce time when using smart debounce (default: 2000ms)" },
+          debounceStrategy: { type: "string", enum: ["fixed", "adaptive", "coalesce"], description: "Debounce strategy: fixed (default), adaptive (adapts to change frequency), or coalesce (groups rapid changes)" },
+          coalesceWindowMs: { type: "number", description: "Time window for coalescing rapid changes in milliseconds (default: 300ms)" },
         },
         additionalProperties: false,
       },
-      execute: async function(input: { debounceMs?: number; pattern?: string; once?: boolean; batchChanges?: boolean; batchTimeoutMs?: number } = {}) {
-        const watcher = await startWatch(api, opts, root, cache, stats, reverseDeps, listFiles, summarizeMany, log, input)
-        if (!input.once) {
-          log("Watch started. Press Ctrl+C to stop.")
-          
-          // Keep running until interrupted
-          await new Promise<void>((resolve) => {
-            process.on("SIGINT", () => {
-              watcher.stop()
-              resolve()
-            })
-          })
+      execute: async function(input: {
+        debounceMs?: number;
+        pattern?: string;
+        once?: boolean;
+        batchChanges?: boolean;
+        batchTimeoutMs?: number;
+        smartDebounce?: boolean;
+        minDebounceMs?: number;
+        maxDebounceMs?: number;
+        debounceStrategy?: "fixed" | "adaptive" | "coalesce";
+        coalesceWindowMs?: number;
+      } = {}) {
+        const manager = createWatchManager(
+          { root, cache, reverseDeps, listFiles, summarizeMany, log },
+          opts,
+          input
+        )
+        await manager.start()
+
+        if (input.once) {
+          // Wait until the first change flushes, which stops the manager.
+          await manager.whenStopped()
+          return
         }
+
+        log("Watch started. Press Ctrl+C to stop.")
+        await new Promise<void>((resolve) => {
+          process.on("SIGINT", () => {
+            manager.stop()
+            resolve()
+          })
+        })
       },
     })
   })
