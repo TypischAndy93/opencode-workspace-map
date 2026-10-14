@@ -8,6 +8,7 @@ build/
 
 # Cache
 .opencode/
+.cortexkit/
 .cache/
 *.log
 
