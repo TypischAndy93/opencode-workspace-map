@@ -37,7 +37,6 @@ import { initializePlugin, type PluginContext } from "./src/setup.js"
 import { createSummarizationEngine } from "./src/summarization-engine.js"
 import { createInjectionEngine } from "./src/injection-engine.js"
 import { createSessionManager } from "./src/session-manager.js"
-import { createVCSIntegration } from "./src/vcs-integration.js"
 import { createHooksManager } from "./src/hooks.js"
 import { createWatchManager } from "./src/watch-manager.js"
 
@@ -98,13 +97,6 @@ export default Plugin.define({
     pluginCtx.listFiles = injectionEngine.listFiles
     pluginCtx.getChangedFilesCached = injectionEngine.getChangedFilesCached
     pluginCtx.summarizeMany = summarizationEngine.summarizeMany
-
-    const vcsIntegration = createVCSIntegration(
-      pluginCtx.api,
-      pluginCtx.root,
-      pluginCtx.vcsCache,
-      logFn
-    )
 
     const hooksManager = createHooksManager()
 
