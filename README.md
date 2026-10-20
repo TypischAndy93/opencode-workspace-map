@@ -60,18 +60,24 @@ flowchart TD
         AB -->|map| AC[Render Tree + Notes]
         AB -->|json| AD[Structured Data + changed[]]
         AB -->|stats| AE[Live Counters & Metadata]
+        AB -->|health| AH[Cache Health & Status]
         AB -->|export| AF[Streaming JSONL Export]
         AB -->|graph| AG[Dependency Graph]
+        AB -->|symbols| AI[List Symbols]
+        AB -->|definition| AJ[Find Symbol Definition]
+        AB -->|references| AK[Find Symbol References]
     end
 
     classDef hook fill:#e1f5fe,stroke:#01579b;
     classDef cache fill:#f3e5f5,stroke:#4a148c;
     classDef inject fill:#e8f5e9,stroke:#1b5e20;
     classDef tool fill:#fff3e0,stroke:#e65100;
+    classDef health fill:#fce4ec,stroke:#880e4f;
     class B,C,R,AA hook;
     class O,P,Q cache;
     class X,Y,Z inject;
     class AB,AC,AD,AE,AF,AG tool;
+    class AH,AI,AJ,AK health;
 ```
 
 1. **Track edits.** Hooks `tool.execute.before` / `tool.execute.after` for the
@@ -194,13 +200,49 @@ object form of the `plugins` entry in `opencode.json` (if present):
   `cachedEntries`, `summaries`, `outlineSummaries`, `modelSummaries`,
   `skippedSummaries`, `skippedByRule`, `walks`, `lastWalkMs`, `dirtyFlushes`,
   `sessions`, `files`, `fullInjections`, `digestInjections`), `"export"` (write
-  JSONL summaries to file), or `"graph"` (dependency graph as JSON).
+  JSONL summaries to file), `"graph"` (dependency graph as JSON), `"symbols"` (list
+  all symbols matching optional `query`, with file + kind), `"definition"` (find a
+  symbol's definition location; requires `symbol` parameter, LSP gives line/character),
+  `"references"` (find files referencing/importing a symbol; requires `symbol`
+  parameter), or `"health"` (cache health, walk duration, error rates, memory usage).
+- `symbol` — symbol name to look up (used with `action: "definition"` or
+  `action: "references"`).
 - `format: "json"` output includes `changed` (VCS-changed files) and per-note
   `updatedAt`.
 
 `action: "graph"` returns a JSON object with:
-- `nodes` — array of `{ id, imports[], importedBy[] }` for each file
+- `nodes` — array of `{ id, imports[], importedBy[], fanIn, fanOut, layer }` for each file
 - `edges` — array of `{ from, to }` representing import relationships
+- `circularDependencies` — array of cycles detected in the import graph
+
+`action: "symbols"` returns a JSON object with:
+- `symbols` — array of `{ file, name, kind }` for all symbols matching the optional `query`
+- `total` — count of matching symbols
+- `query` — the query string used (or null if none)
+
+`action: "definition"` returns a JSON object with:
+- `symbol` — the symbol name looked up
+- `found` — whether the symbol was found
+- `file` — the file defining the symbol (if found)
+- `line` / `character` — definition position (LSP mode only; outline mode provides file only)
+- `kind` — symbol kind (e.g., "class", "function")
+
+`action: "references"` returns a JSON object with:
+- `symbol` — the symbol name looked up
+- `found` — whether the symbol was found
+- `references` — array of `{ file }` referencing or importing the symbol
+- `total` — count of referencing files
+
+`action: "health"` returns a JSON object with:
+- `status` — `"ok"`, `"warning"`, or `"critical"` based on thresholds
+- `issues` — array of human-readable issue descriptions
+- `cache` — entries, summaries, skipped, hitRatePercent
+- `walk` — lastWalkMs, totalWalks, files
+- `injections` — full, digest, dirtyFlushes, lastInjectionChars, lastInjectionAt
+- `memory` — rssMb, heapTotalMb, heapUsedMb, externalMb
+- `summaries` — outline, model, lsp, total
+- `cost` — totalInputTokens, totalOutputTokens, totalCostUsd
+- `sessions`, `warmup`, `version`, `timestamp`
 
 ## CLI Commands
 
@@ -243,14 +285,35 @@ opencode workspace-map:clear-cache --confirm=true
 
 ```bash
 opencode workspace-map:watch --debounce-ms 500 --pattern "src/**/*.ts" --once
+opencode workspace-map:watch --daemon --pid-file .opencode/workspace-map.pid
 ```
 
 This command uses `fs.watch` to monitor the workspace root for file changes and automatically re-summarizes modified files.
+
+- **`workspace-map:profile`** — Profile CPU and memory usage of walk + summarize operations.
+
+```bash
+opencode workspace-map:profile --format text --iterations 3
+opencode workspace-map:profile --format json --iterations 5
+```
+
+Options:
+  - `--format text|json` — Output format (default: text)
+  - `--iterations N` — Number of walk+summarize iterations to average (default: 3)
 
 Editor validation: the options schema lives in `config.schema.json` next to the
 plugin.
 
 ## Changelog
+
+### 0.5.0 (unreleased)
+
+- **Symbol navigation:** New `workspace_map` actions `symbols`, `definition`, and `references` for symbol lookup, definition finding, and reference tracking (LSP-enhanced with line/character positions).
+- **Dependency graph enhancements:** `action: "graph"` now returns `fanIn`/`fanOut` metrics per file, `layer` (directory depth), and `circularDependencies` cycle detection.
+- **Health check & profiling:** New `action: "health"` for cache health, walk duration, error rates, and memory usage with ok/warning/critical thresholds. New `workspace-map:profile` CLI command for CPU/memory profiling of walk+summarize.
+- **Daemon watch mode:** `workspace-map:watch` supports `--daemon` (detached background process) and `--pid-file` for process management. Watcher pauses during active agent write execution and resumes after.
+- **Language summarizers:** Added C# (Roslyn-style) summarizer with namespaces, classes, interfaces, enums, records, methods, properties, fields, events, delegates. Enhanced Dart support with mixins, typedefs, and getters/setters.
+- **Metrics:** OpenTelemetry OTLP exporter selection added to metrics configuration.
 
 ### 0.4.0
 
