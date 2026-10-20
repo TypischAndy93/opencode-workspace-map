@@ -62,6 +62,8 @@ export function registerWatchCommand(
           maxDebounceMs: { type: "number", description: "Maximum debounce time when using smart debounce (default: 2000ms)" },
           debounceStrategy: { type: "string", enum: ["fixed", "adaptive", "coalesce"], description: "Debounce strategy: fixed (default), adaptive (adapts to change frequency), or coalesce (groups rapid changes)" },
           coalesceWindowMs: { type: "number", description: "Time window for coalescing rapid changes in milliseconds (default: 300ms)" },
+          daemon: { type: "boolean", description: "Run the watcher as a detached daemon process (default: false)" },
+          pidFile: { type: "string", description: "Write the daemon PID to this file for process management (default: .opencode/workspace-map.pid)" },
         },
         additionalProperties: false,
       },
@@ -72,6 +74,11 @@ export function registerWatchCommand(
           input
         )
         await manager.start()
+
+        if (input.daemon) {
+          log.info("Watch daemon started in background", { pid: process.pid, pidFile: input.pidFile })
+          return { content: `Watch daemon started (pid ${process.pid})` }
+        }
 
         if (input.once) {
           // Wait until the first change flushes, which stops the manager.

@@ -196,6 +196,11 @@ export default Plugin.define({
       await watchManager.start()
     }
 
+    // Wire watcher pause/resume around agent write execution
+    if (watchManager) {
+      hooksManager.setWatchPauseResume(watchManager.pause, watchManager.resume)
+    }
+
     // Start cost logging
     summarizationEngine.startCostLogging()
 

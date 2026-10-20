@@ -28,6 +28,10 @@ export interface HooksManager {
     log: Logger
   ): void
 
+  /** Wire watcher pause/resume around write tool execution so the watcher is
+   *  paused while the agent is actively editing files. */
+  setWatchPauseResume(pauseWatch: () => void, resumeWatch: () => void): void
+
   setupSessionContextHook(
     api: Context,
     opts: Options,
@@ -54,6 +58,9 @@ export interface HooksManager {
 }
 
 export function createHooksManager(): HooksManager {
+  let pauseWatch: (() => void) | undefined
+  let resumeWatch: (() => void) | undefined
+
   return {
     setupRefreshOnWriteHook(api, opts, root, disposed, pendingWrites, markDirty, log) {
       if (!opts.refreshOnWrite) return
@@ -62,6 +69,8 @@ export function createHooksManager(): HooksManager {
         if (disposed.current) return
         const tool = String(event?.tool ?? "").toLowerCase()
         if (!WRITE_TOOLS.has(tool)) return
+        // Pause watcher during active agent write execution
+        pauseWatch?.()
         const rels = relsFromInput(event?.input as ToolInput, root)
         if (rels.length) {
           pendingWrites.push({ rels, sessionID: event?.sessionID })
@@ -73,6 +82,8 @@ export function createHooksManager(): HooksManager {
         if (disposed.current) return
         const tool = String(event?.tool ?? "").toLowerCase()
         if (!WRITE_TOOLS.has(tool)) return
+        // Resume watcher after agent write execution completes
+        resumeWatch?.()
         let rels = relsFromInput(event?.input as ToolInput, root)
         let sessionID: string | undefined = event?.sessionID
         if (!rels.length) {
@@ -84,6 +95,11 @@ export function createHooksManager(): HooksManager {
         }
         for (const rel of rels) if (rel) markDirty(sessionID, rel, opts.debounceMs)
       })
+    },
+
+    setWatchPauseResume(p: () => void, r: () => void) {
+      pauseWatch = p
+      resumeWatch = r
     },
 
     setupSessionContextHook(api, opts, broadRoot, disposed, getInjection, log, metricsCollector) {

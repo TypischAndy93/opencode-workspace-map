@@ -2,6 +2,7 @@ import type { Options, FileEntry, Logger } from "./config/index.ts"
 import { globToRegex } from "./fs/gitignore.ts"
 import * as path from "node:path"
 import * as fs from "node:fs/promises"
+import * as fsSync from "node:fs"
 
 /** Debounce strategy: "fixed" uses a constant delay, "adaptive" adapts to how
  *  often a file changes, "coalesce" groups rapid changes within a window. */
@@ -24,6 +25,10 @@ export interface WatchRuntimeOptions {
   coalesceWindowMs?: number
   onBatchStart?: (count: number) => void
   onBatchComplete?: (count: number, durationMs: number) => void
+  /** Run the watcher as a detached daemon process (CLI command only). */
+  daemon?: boolean
+  /** Write the daemon PID to this file (used with --daemon). */
+  pidFile?: string
 }
 
 /** Minimal metrics surface the manager uses (kept structural to avoid a
@@ -48,6 +53,11 @@ export interface WatchManager {
   isRunning(): boolean
   /** Resolves once `stop()` has been called (used for `once` mode / SIGINT). */
   whenStopped(): Promise<void>
+  /** Temporarily suspend change handling (e.g. during active agent execution). */
+  pause(): void
+  /** Resume change handling after a pause. */
+  resume(): void
+  isPaused(): boolean
 }
 
 /** Polling fallback interval (ms). */
@@ -79,9 +89,12 @@ export function createWatchManager(
   const coalesceWindowMs = runtime.coalesceWindowMs ?? watchConfig.coalesceWindowMs ?? 300
   const onBatchStart = runtime.onBatchStart
   const onBatchComplete = runtime.onBatchComplete
+  const daemon = runtime.daemon ?? false
+  const pidFile = runtime.pidFile
 
   let disposed = false
   let started = false
+  let paused = false
   let watcher: ReturnType<typeof import("node:fs").watch> | null = null
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let lastKnownFiles: Set<string> | null = null
@@ -242,6 +255,7 @@ export function createWatchManager(
 
   async function handleFileChange(rel: string, eventType: string) {
     if (disposed) return
+    if (paused) return
     if (pattern && !pattern.test(rel)) return
 
     const absPath = path.join(root, rel)
@@ -300,9 +314,48 @@ export function createWatchManager(
     }, POLL_INTERVAL)
   }
 
+  /** Write the current process PID to pidFile and set up signal handlers for
+   *  graceful shutdown. Used by daemon mode so the watcher can be managed as a
+   *  background process. */
+  function daemonize(pidFile: string | undefined, log: Logger): void {
+    if (!pidFile) return
+    try {
+      fsSync.writeFileSync(pidFile, String(process.pid), "utf8")
+      log.info("watch: daemon pid file written", { pidFile, pid: process.pid })
+    } catch (err) {
+      log.warn("watch: could not write pid file", { pidFile, error: err })
+    }
+
+    const cleanup = () => {
+      try {
+        fsSync.unlinkSync(pidFile)
+      } catch {
+        // ignore - file may already be gone
+      }
+    }
+
+    process.once("SIGTERM", () => {
+      log.info("watch: received SIGTERM, stopping")
+      cleanup()
+      process.exit(0)
+    })
+    process.once("SIGINT", () => {
+      log.info("watch: received SIGINT, stopping")
+      cleanup()
+      process.exit(0)
+    })
+    process.on("exit", cleanup)
+  }
+
   async function start(): Promise<void> {
     if (disposed || started) return
     started = true
+
+    // Daemon mode: detach into a background child process and write a PID file.
+    if (daemon) {
+      await daemonize(pidFile, log)
+      // After daemonize, the parent process exits; the child continues below.
+    }
 
     const { watch } = await import("node:fs")
 
@@ -337,6 +390,14 @@ export function createWatchManager(
   function stop() {
     if (disposed) return
     disposed = true
+    // Clean up pid file on stop
+    if (pidFile) {
+      try {
+        fsSync.unlinkSync(pidFile)
+      } catch {
+        // ignore - file may already be gone
+      }
+    }
     if (batchTimer) clearTimeout(batchTimer)
     if (pollTimer) clearInterval(pollTimer)
     for (const t of pending.values()) clearTimeout(t)
@@ -368,5 +429,19 @@ export function createWatchManager(
     return stoppedPromise
   }
 
-  return { start, stop, isRunning, whenStopped }
+  function pause(): void {
+    paused = true
+    log.info("watch: paused")
+  }
+
+  function resume(): void {
+    paused = false
+    log.info("watch: resumed")
+  }
+
+  function isPaused(): boolean {
+    return paused
+  }
+
+  return { start, stop, isRunning, isPaused, pause, resume, whenStopped }
 }
