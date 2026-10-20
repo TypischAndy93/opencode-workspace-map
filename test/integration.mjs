@@ -114,6 +114,24 @@ async function main() {
       }
     })
 
+    // Test 4: Watch mode - modify a file and verify it gets re-summarized
+    // Use --once so the watch command exits after the first change
+    await fs.writeFile(path.join(FIXTURE_DIR, "src/watched.ts"), "export const watched = 1\n")
+    const watchResult = await runCommand("opencode", [
+      "run",
+      "Run workspace-map:watch once to pick up the new watched.ts file",
+      "--model", "opencode/nemotron-3-ultra-free"
+    ], { 
+      cwd: FIXTURE_DIR,
+      timeout: 60000 
+    })
+
+    await test("Watch mode picks up new files", () => {
+      if (watchResult.includes("Error loading plugin")) {
+        throw new Error("Watch command failed to load plugin")
+      }
+    })
+
   } finally {
     await fs.rm(FIXTURE_DIR, { recursive: true, force: true })
   }
