@@ -6,6 +6,7 @@ import { PYTHON_SYMBOL_RULES, PYTHON_EXTENSIONS } from "./python.ts"
 import { GO_SYMBOL_RULES, GO_EXTENSIONS } from "./go.ts"
 import { RUST_SYMBOL_RULES, RUST_EXTENSIONS } from "./rust.ts"
 import { JVM_SYMBOL_RULES, JVM_EXTENSIONS } from "./jvm.ts"
+import { CSHARP_SYMBOL_RULES, CSHARP_EXTENSIONS } from "./csharp.ts"
 import { SHELL_SYMBOL_RULES, SHELL_EXTENSIONS } from "./shell.ts"
 import { SQL_SYMBOL_RULES, SQL_EXTENSIONS } from "./sql.ts"
 import { C_SYMBOL_RULES, C_EXTENSIONS } from "./c.ts"
@@ -38,6 +39,7 @@ export class LanguageRuleRegistry {
     this.register("python", PYTHON_EXTENSIONS, PYTHON_SYMBOL_RULES)
     this.register("go", GO_EXTENSIONS, GO_SYMBOL_RULES)
     this.register("rust", RUST_EXTENSIONS, RUST_SYMBOL_RULES)
+    this.register("csharp", CSHARP_EXTENSIONS, CSHARP_SYMBOL_RULES)
     this.register("jvm", JVM_EXTENSIONS, JVM_SYMBOL_RULES)
     this.register("shell", SHELL_EXTENSIONS, SHELL_SYMBOL_RULES)
     this.register("sql", SQL_EXTENSIONS, SQL_SYMBOL_RULES)
@@ -95,6 +97,7 @@ export class LanguageRuleRegistry {
       python: PYTHON_SYMBOL_RULES,
       go: GO_SYMBOL_RULES,
       rust: RUST_SYMBOL_RULES,
+      csharp: CSHARP_SYMBOL_RULES,
       jvm: JVM_SYMBOL_RULES,
       shell: SHELL_SYMBOL_RULES,
       sql: SQL_SYMBOL_RULES,
