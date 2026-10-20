@@ -80,9 +80,9 @@
 ## 🧪 P3 - Testing & Comprehensive Features
 
 ### 11. Unit Test Suite
-- [ ] `globToRegex`, `compileGitignore`, `detectProject`, `autoTuneOptions`
-- [ ] `buildInjectionRev`, `renderTree`, `renderJson`
-- [ ] Cache invalidation, tree mutations, reverse deps consistency
+- [x] `globToRegex`, `compileGitignore`, `detectProject`, `autoTuneOptions`
+- [x] `buildInjectionRev`, `renderTree`, `renderJson`
+- [x] Cache invalidation, tree mutations, reverse deps consistency
 
 ### 12. Integration Tests
 - [ ] Full walk → summarize → inject cycle
