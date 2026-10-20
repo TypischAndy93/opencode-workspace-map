@@ -296,24 +296,32 @@ function toRel(input: string, root: string): string | undefined {
   return rel.split(path.sep).join("/")
 }
 
-function buildDependencyGraph(cache: Map<string, FileEntry>, reverseDeps: Map<string, Set<string>>, files: string[]): {
-  nodes: Array<{ id: string; imports: string[]; importedBy: string[] }>;
+export function buildDependencyGraph(cache: Map<string, FileEntry>, reverseDeps: Map<string, Set<string>>, files: string[]): {
+  nodes: Array<{ id: string; imports: string[]; importedBy: string[]; fanIn: number; fanOut: number; layer: number }>;
   edges: Array<{ from: string; to: string }>;
+  circularDependencies: Array<string[]>;
 } {
-  const nodes = new Map<string, { id: string; imports: string[]; importedBy: string[] }>()
+  const nodes = new Map<string, { id: string; imports: string[]; importedBy: string[]; fanIn: number; fanOut: number; layer: number }>()
   const edges: Array<{ from: string; to: string }> = []
 
   for (const rel of files) {
     const entry = cache.get(rel)
     if (!entry) continue
     const importedBy = reverseDeps.get(rel) ? [...reverseDeps.get(rel)!] : []
-    nodes.set(rel, { id: rel, imports: entry.imports ?? [], importedBy })
+    const layer = rel.split("/").length - 1 // directory depth (root-level files = 0)
+    nodes.set(rel, {
+      id: rel,
+      imports: entry.imports ?? [],
+      importedBy,
+      fanIn: importedBy.length,
+      fanOut: entry.imports?.length ?? 0,
+      layer,
+    })
   }
 
-  // Build edges from imports
+  // Build edges from imports (best-effort resolution)
   for (const [rel, entry] of nodes) {
     for (const imp of entry.imports) {
-      // Try to resolve the import to a file in our workspace
       const resolved = resolveImport(imp, rel, nodes)
       if (resolved) {
         edges.push({ from: rel, to: resolved })
@@ -321,10 +329,84 @@ function buildDependencyGraph(cache: Map<string, FileEntry>, reverseDeps: Map<st
     }
   }
 
+  // Detect circular dependencies via DFS
+  const circularDependencies = detectCycles(nodes, edges)
+
   return {
     nodes: [...nodes.values()],
     edges,
+    circularDependencies,
   }
+}
+
+/**
+ * Detects cycles in the dependency graph using DFS with coloring.
+ * Returns each cycle as an array of node ids forming the cycle.
+ */
+function detectCycles(nodes: Map<string, any>, edges: Array<{ from: string; to: string }>): Array<string[]> {
+  const adjacency = new Map<string, string[]>()
+  for (const node of nodes.values()) {
+    adjacency.set(node.id, [])
+  }
+  for (const { from, to } of edges) {
+    const targets = adjacency.get(from)
+    if (targets) targets.push(to)
+  }
+
+  const WHITE = 0, GRAY = 1, BLACK = 2
+  const color = new Map<string, number>()
+  for (const id of nodes.keys()) color.set(id, WHITE)
+
+  const cycles: Array<string[]> = []
+  const stack: string[] = []
+
+  function dfs(u: string): boolean {
+    color.set(u, GRAY)
+    stack.push(u)
+    for (const v of adjacency.get(u) ?? []) {
+      if (!nodes.has(v)) continue
+      const c = color.get(v)
+      if (c === GRAY) {
+        // Found a back edge → cycle. Extract the cycle from the stack.
+        const cycleStart = stack.indexOf(v)
+        if (cycleStart >= 0) {
+          const cycle = [...stack.slice(cycleStart), v]
+          cycles.push(cycle)
+        }
+      } else if (c === WHITE) {
+        dfs(v)
+      }
+    }
+    stack.pop()
+    color.set(u, BLACK)
+    return true
+  }
+
+  for (const id of nodes.keys()) {
+    if (color.get(id) === WHITE) {
+      dfs(id)
+    }
+  }
+
+  // Deduplicate cycles that are rotations of each other
+  const canonical = new Set<string>()
+  const unique: Array<string[]> = []
+  for (const cycle of cycles) {
+    // Remove the repeated last node (v appears twice) for canonical form
+    const nodesOnly = cycle.slice(0, -1)
+    // Rotate so the lexicographically smallest node comes first
+    let minIdx = 0
+    for (let i = 1; i < nodesOnly.length; i++) {
+      if (nodesOnly[i] < nodesOnly[minIdx]) minIdx = i
+    }
+    const rotated = [...nodesOnly.slice(minIdx), ...nodesOnly.slice(0, minIdx)]
+    const key = rotated.join("|")
+    if (!canonical.has(key)) {
+      canonical.add(key)
+      unique.push([...rotated, rotated[0]]) // close the cycle
+    }
+  }
+  return unique
 }
 
 function resolveImport(imp: string, fromFile: string, nodes: Map<string, any>): string | null {

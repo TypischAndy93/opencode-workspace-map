@@ -147,6 +147,29 @@ async function main() {
       assert.ok(refFiles.includes("src/db.ts"), `expected src/db.ts in references`)
     })
 
+    await test("graph action returns nodes, edges, layers and no cycles for DAG", async () => {
+      const res = JSON.parse((await tool.execute({ action: "graph" }, {})).content)
+      assert.ok(Array.isArray(res.nodes), "graph should have nodes array")
+      assert.ok(Array.isArray(res.edges), "graph should have edges array")
+      assert.ok(Array.isArray(res.circularDependencies), "graph should have circularDependencies array")
+      // Every node should have fanIn, fanOut, and layer
+      for (const node of res.nodes) {
+        assert.ok(typeof node.fanIn === "number", `node ${node.id} missing fanIn`)
+        assert.ok(typeof node.fanOut === "number", `node ${node.id} missing fanOut`)
+        assert.ok(typeof node.layer === "number", `node ${node.id} missing layer`)
+      }
+      // A DAG should have no cycles
+      assert.equal(res.circularDependencies.length, 0, "expected no cycles in DAG fixture")
+    })
+
+    await test("graph action nodes include expected files", async () => {
+      const res = JSON.parse((await tool.execute({ action: "graph" }, {})).content)
+      const fileIds = res.nodes.map((n) => n.id)
+      assert.ok(fileIds.includes("src/user.ts"), `expected src/user.ts in graph nodes`)
+      assert.ok(fileIds.includes("src/db.ts"), `expected src/db.ts in graph nodes`)
+      assert.ok(fileIds.includes("src/index.ts"), `expected src/index.ts in graph nodes`)
+    })
+
     console.log(`\n${passed} passed, ${failed} failed`)
     process.exitCode = failed ? 1 : 0
   } finally {
