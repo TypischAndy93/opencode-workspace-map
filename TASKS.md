@@ -115,9 +115,9 @@
 - [x] Pause during agent execution
 
 ### 17. Health Check & Profiling
-- [ ] `action: "health"` tool endpoint
-- [ ] `workspace-map:profile` command (CPU/memory)
-- [ ] OpenTelemetry metrics export config
+- [x] `action: "health"` tool endpoint
+- [x] `workspace-map:profile` command (CPU/memory)
+- [x] OpenTelemetry metrics export config
 
 ---
 

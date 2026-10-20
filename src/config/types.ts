@@ -238,7 +238,7 @@ export interface WorkspaceMapInput {
   refresh?: boolean
   limit?: number
   format?: "map" | "json"
-  action?: "map" | "stats" | "export" | "graph" | "packages" | "symbols" | "definition" | "references"
+  action?: "map" | "stats" | "export" | "graph" | "packages" | "symbols" | "definition" | "references" | "health"
   symbol?: string
 }
 

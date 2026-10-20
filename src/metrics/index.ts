@@ -34,6 +34,7 @@ export class MetricsCollector {
   private enabled: boolean
   private readonly exportIntervalMs: number
   private meterProvider: MeterProvider | null = null
+  private opts: Options
 
   // Counters
   private filesWalked: ReturnType<Meter["createCounter"]> | null = null
@@ -57,6 +58,7 @@ export class MetricsCollector {
     this.enabled = opts.metrics?.enabled ?? false
     this.exportIntervalMs = opts.metrics?.intervalMs ?? 60000
     this.meter = metrics.getMeter("workspace-map", VERSION)
+    this.opts = opts
   }
 
   async initialize(): Promise<void> {
@@ -66,7 +68,15 @@ export class MetricsCollector {
     const { ConsoleMetricExporter } = await import("@opentelemetry/sdk-metrics")
     const { OTLPMetricExporter } = await import("@opentelemetry/exporter-metrics-otlp-proto")
 
-    const exporter = this.getExporter()
+    const exporterType = this.opts?.metrics?.exporter ?? "console"
+    let exporter: PushMetricExporter | null = null
+
+    if (exporterType === "otlp") {
+      exporter = new OTLPMetricExporter()
+    } else {
+      exporter = new ConsoleMetricExporter()
+    }
+
     const intervalMs = this.exportIntervalMs
 
     const reader = new PeriodicExportingMetricReader({
@@ -91,9 +101,7 @@ export class MetricsCollector {
   }
 
   private getExporter(): PushMetricExporter | null {
-    if (this.enabled) {
-      return new ConsoleMetricExporter()
-    }
+    // Deprecated: exporter selection now happens in initialize() where async imports are available.
     return null
   }
 

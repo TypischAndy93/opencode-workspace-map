@@ -160,6 +160,86 @@ export function createWorkspaceMapTool(pluginCtx: PluginContext) {
           }
         }
 
+        // ---- Health Check Action ----
+
+        if (input?.action === "health") {
+          const mem = process.memoryUsage()
+          const totalCacheLookups = stats.summaries + stats.skippedSummaries
+          const cacheHitRate = totalCacheLookups > 0 ? (stats.summaries / totalCacheLookups) * 100 : 100
+
+          // Health thresholds
+          const walkWarningMs = 5000
+          const walkCriticalMs = 15000
+          const hitRateWarning = 70
+          const hitRateCritical = 40
+
+          let status = "ok"
+          const issues: string[] = []
+
+          if (stats.lastWalkMs > walkCriticalMs) {
+            status = "critical"
+            issues.push(`walk duration ${stats.lastWalkMs}ms exceeds critical threshold ${walkCriticalMs}ms`)
+          } else if (stats.lastWalkMs > walkWarningMs) {
+            if (status === "ok") status = "warning"
+            issues.push(`walk duration ${stats.lastWalkMs}ms exceeds warning threshold ${walkWarningMs}ms`)
+          }
+
+          if (cacheHitRate < hitRateCritical) {
+            status = "critical"
+            issues.push(`cache hit rate ${cacheHitRate.toFixed(1)}% below critical threshold ${hitRateCritical}%`)
+          } else if (cacheHitRate < hitRateWarning) {
+            if (status === "ok") status = "warning"
+            issues.push(`cache hit rate ${cacheHitRate.toFixed(1)}% below warning threshold ${hitRateWarning}%`)
+          }
+
+          const health = {
+            version: VERSION,
+            action: "health",
+            status,
+            timestamp: Date.now(),
+            issues,
+            cache: {
+              entries: cache.size,
+              summaries: stats.summaries,
+              skipped: stats.skippedSummaries,
+              hitRatePercent: Math.round(cacheHitRate * 100) / 100,
+            },
+            walk: {
+              lastWalkMs: stats.lastWalkMs,
+              totalWalks: stats.walks,
+              files: stats.files,
+            },
+            injections: {
+              full: stats.fullInjections,
+              digest: stats.digestInjections,
+              dirtyFlushes: stats.dirtyFlushes,
+              lastInjectionChars: stats.lastInjectionChars,
+              lastInjectionAt: stats.lastInjectionAt,
+            },
+            memory: {
+              rssMb: Math.round(mem.rss / 1024 / 1024 * 100) / 100,
+              heapTotalMb: Math.round(mem.heapTotal / 1024 / 1024 * 100) / 100,
+              heapUsedMb: Math.round(mem.heapUsed / 1024 / 1024 * 100) / 100,
+              externalMb: Math.round(mem.external / 1024 / 1024 * 100) / 100,
+            },
+            summaries: {
+              outline: stats.outlineSummaries,
+              model: stats.modelSummaries,
+              lsp: stats.lspSummaries,
+              total: stats.summaries,
+            },
+            cost: {
+              totalInputTokens: stats.totalInputTokens,
+              totalOutputTokens: stats.totalOutputTokens,
+              totalCostUsd: Math.round(stats.totalCostUsd * 1_000_000) / 1_000_000,
+            },
+            sessions: stats.sessions,
+            warmup: stats.warmups,
+          }
+
+          return { content: JSON.stringify(health, null, 2) }
+        }
+
         const force = input?.refresh === true
         const files = await listFiles(force)
         let matched = files

@@ -744,5 +744,91 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         return { content: successMsg, path: outputPath, config }
       },
     })
+
+    // workspace-map:profile - Profile CPU/memory usage of walk + summarize
+    editor.add({
+      name: "workspace-map:profile",
+      description: "Profile CPU and memory usage of workspace map walk and summarize operations",
+      input: {
+        type: "object",
+        properties: {
+          format: { type: "string", enum: ["text", "json"], description: "Output format (default: text)" },
+          iterations: { type: "number", description: "Number of walk+summarize iterations to average (default: 3)" },
+        },
+        additionalProperties: false,
+      },
+      execute: async function(input: any = {}) {
+        const format = input.format ?? "text"
+        const iterations = typeof input.iterations === "number" && input.iterations > 0 ? Math.floor(input.iterations) : 3
+
+        const results: Array<{ walkMs: number; summarizeMs: number; files: number; memoryRssMb: number; memoryHeapUsedMb: number }> = []
+
+        for (let i = 0; i < iterations; i++) {
+          const memBefore = process.memoryUsage()
+          const walkStart = Date.now()
+          const files = await listFiles(true)
+          const walkMs = Date.now() - walkStart
+
+          const summarizeStart = Date.now()
+          await summarizeMany(files.slice(0, 200), false)
+          const summarizeMs = Date.now() - summarizeStart
+
+          const memAfter = process.memoryUsage()
+          results.push({
+            walkMs,
+            summarizeMs,
+            files: files.length,
+            memoryRssMb: Math.round((memAfter.rss - memBefore.rss) / 1024 / 1024 * 100) / 100,
+            memoryHeapUsedMb: Math.round((memAfter.heapUsed - memBefore.heapUsed) / 1024 / 1024 * 100) / 100,
+          })
+        }
+
+        const avgWalkMs = results.reduce((sum, r) => sum + r.walkMs, 0) / iterations
+        const avgSummarizeMs = results.reduce((sum, r) => sum + r.summarizeMs, 0) / iterations
+        const avgFiles = results.reduce((sum, r) => sum + r.files, 0) / iterations
+        const avgRssMb = results.reduce((sum, r) => sum + r.memoryRssMb, 0) / iterations
+        const avgHeapUsedMb = results.reduce((sum, r) => sum + r.memoryHeapUsedMb, 0) / iterations
+
+        const profile = {
+          version: VERSION,
+          iterations,
+          average: {
+            walkMs: Math.round(avgWalkMs * 100) / 100,
+            summarizeMs: Math.round(avgSummarizeMs * 100) / 100,
+            files: Math.round(avgFiles * 100) / 100,
+            memoryRssMb: Math.round(avgRssMb * 100) / 100,
+            memoryHeapUsedMb: Math.round(avgHeapUsedMb * 100) / 100,
+          },
+          runs: results,
+        }
+
+        if (format === "json") {
+          console.log(JSON.stringify(profile, null, 2))
+          return { content: JSON.stringify(profile) }
+        }
+
+        const lines = [
+          `Workspace Map Profile (v${VERSION})`,
+          `=====================================`,
+          `Iterations: ${iterations}`,
+          ``,
+          `Average Results:`,
+          `  Walk duration:    ${profile.average.walkMs} ms`,
+          `  Summarize duration: ${profile.average.summarizeMs} ms`,
+          `  Files:            ${profile.average.files}`,
+          `  Memory RSS delta: ${profile.average.memoryRssMb} MB`,
+          `  Memory heap used: ${profile.average.memoryHeapUsedMb} MB`,
+          ``,
+          `Per-Run Details:`,
+        ]
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i]
+          lines.push(`  Run ${i + 1}: walk=${r.walkMs}ms, summarize=${r.summarizeMs}ms, files=${r.files}, rssDelta=${r.memoryRssMb}MB, heapDelta=${r.memoryHeapUsedMb}MB`)
+        }
+        const text = lines.join("\n")
+        console.log(text)
+        return { content: text }
+      },
+    })
   })
 }
