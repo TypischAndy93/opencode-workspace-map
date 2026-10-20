@@ -104,10 +104,10 @@
 ## 🎯 P4 - Nice to Have
 
 ### 15. More Language Summarizers
-- [ ] Dart/Flutter
-- [ ] C# (Roslyn)
-- [ ] Swift (SwiftSyntax)
-- [ ] Rust (syn)
+- [x] Dart/Flutter (via swift-dart.ts with Dart-specific rules)
+- [x] C# (Roslyn) (csharp.ts)
+- [x] Swift (SwiftSyntax) (via swift-dart.ts)
+- [x] Rust (syn) (rust.ts, already registered)
 
 ### 16. Daemon Watch Mode
 - [ ] `--daemon` flag for `workspace-map:watch`
