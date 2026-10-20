@@ -95,9 +95,9 @@
 - [x] `action: "references"` - find references (requires LSP)
 
 ### 14. Dependency Graph Enhancements
-- [ ] Circular dependency detection
-- [ ] Fan-in/fan-out metrics per file
-- [ ] Architectural layers (group by directory depth)
+- [x] Circular dependency detection
+- [x] Fan-in/fan-out metrics per file
+- [x] Architectural layers (group by directory depth)
 
 ---
 
