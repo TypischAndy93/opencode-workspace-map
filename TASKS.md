@@ -85,9 +85,9 @@
 - [x] Cache invalidation, tree mutations, reverse deps consistency
 
 ### 12. Integration Tests
-- [ ] Full walk → summarize → inject cycle
-- [ ] Monorepo with multiple packages
-- [ ] Watch mode file changes
+- [x] Full walk → summarize → inject cycle
+- [x] Monorepo with multiple packages
+- [x] Watch mode file changes
 
 ### 13. Symbol Navigation
 - [ ] `action: "symbols"` - list all symbols matching query
