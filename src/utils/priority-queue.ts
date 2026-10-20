@@ -13,6 +13,8 @@ export class PriorityQueue {
   private concurrency: number
   private active = 0
   private onDrain?: () => void
+  private executeFn?: (job: SummarizationJob) => Promise<void>
+  private cancelled = false
 
   constructor(concurrency: number, onDrain?: () => void) {
     this.concurrency = concurrency
@@ -20,6 +22,7 @@ export class PriorityQueue {
   }
 
   enqueue(job: SummarizationJob): void {
+    if (this.cancelled) return
     this.queue.push(job)
     this.queue.sort((a, b) => {
       // Sort by priority first (changed > recent > warmup > background)
@@ -38,6 +41,7 @@ export class PriorityQueue {
   }
 
   enqueueBatch(jobs: SummarizationJob[]): void {
+    if (this.cancelled) return
     for (const job of jobs) {
       this.queue.push(job)
     }
@@ -56,7 +60,7 @@ export class PriorityQueue {
   }
 
   private async process(): Promise<void> {
-    if (this.processing || this.active >= this.concurrency || this.queue.length === 0) {
+    if (this.processing || this.active >= this.concurrency || this.queue.length === 0 || this.cancelled) {
       if (this.queue.length === 0 && this.active === 0 && this.onDrain) {
         this.onDrain()
       }
@@ -65,7 +69,7 @@ export class PriorityQueue {
 
     this.processing = true
 
-    while (this.queue.length > 0 && this.active < this.concurrency) {
+    while (this.queue.length > 0 && this.active < this.concurrency && !this.cancelled) {
       const job = this.queue.shift()
       if (!job) break
 
@@ -87,11 +91,13 @@ export class PriorityQueue {
 
   // Override this method to provide the actual job execution
   protected async executeJob(job: SummarizationJob): Promise<void> {
-    // To be implemented by subclass or via callback
+    if (this.executeFn) {
+      await this.executeFn(job)
+    }
   }
 
   setExecuteFn(fn: (job: SummarizationJob) => Promise<void>): void {
-    this.executeJob = fn
+    this.executeFn = fn
   }
 
   size(): number {
@@ -108,6 +114,21 @@ export class PriorityQueue {
 
   clear(): void {
     this.queue = []
+    this.cancelled = true
+  }
+
+  cancel(): void {
+    this.cancelled = true
+    this.queue = []
+  }
+
+  resume(): void {
+    this.cancelled = false
+    this.process()
+  }
+
+  isCancelled(): boolean {
+    return this.cancelled
   }
 
   // Get jobs by priority for debugging/stats

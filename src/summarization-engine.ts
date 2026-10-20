@@ -1,22 +1,24 @@
 import type { Context, Cleanup } from "@opencode/plugin/promise/plugin"
-import type { Options, FileEntry, Stats, SymbolInfo, SummarySections, SummarizerKind, ProjectInfo } from "./config/index.ts"
+import type { Options, FileEntry, Stats, SymbolInfo, SummarySections, SummarizerKind, ProjectInfo, Logger } from "./config/index.ts"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { extOf, getFallbackChain, DEFAULT_OPTIONS, SECRET_EXT, SECRET_STEM, SECRET_STEM_EXT, BINARY_EXT, CODE_EXT, DATA_EXT, entryPrefix } from "./config/index.js"
+import { getFallbackChain, DEFAULT_OPTIONS, entryPrefix } from "./config/index.js"
+import { extOf, isSecret } from "./utils/file.js"
 import { outlineSummarize, modelSummary, lspSummarize } from "./summarizers/index.js"
 import { saveEntry, pruneCache, scheduleBatchWrite, flushPendingWrites } from "./storage/cache.js"
 import { createSemaphore } from "./utils/semaphore.js"
 import { PriorityQueue, SummarizationPriority } from "./utils/priority-queue.js"
+import { MetricsCollector, NoOpMetricsCollector } from "./metrics/index.js"
+import { isCancelledError, raceCancellation } from "./utils/cancellation.js"
 
 export interface SummarizationEngine {
-  summarize(rel: string, force: boolean): Promise<void>
-  summarizeMany(rels: string[], force: boolean, priority?: SummarizationPriority): Promise<void>
+  summarize(rel: string, force: boolean, signal?: AbortSignal): Promise<void>
+  summarizeMany(rels: string[], force: boolean, priority?: SummarizationPriority, signal?: AbortSignal): Promise<void>
   trackCost(kind: SummarizerKind, inputTokens: number, outputTokens: number): void
   startCostLogging(): void
   stopCostLogging(): void
+  shutdown(): Promise<void>
 }
-
-export type LogFn = (...args: unknown[]) => void
 
 export function createSummarizationEngine(
   api: Context,
@@ -28,8 +30,9 @@ export function createSummarizationEngine(
   reverseDeps: Map<string, Set<string>>,
   stats: Stats,
   filterCtx: ReturnType<typeof import("./fs/filter.js").createFilterContext>,
-  log: LogFn,
-  project: ProjectInfo
+  log: Logger,
+  project: ProjectInfo,
+  metricsCollector: MetricsCollector | NoOpMetricsCollector
 ): SummarizationEngine {
   
   // Cost tracking
@@ -38,6 +41,17 @@ export function createSummarizationEngine(
   // LSP Response Caching
   const lspCache = new Map<string, { symbols: Array<{ name: string; kind?: string }>; imports: string[]; sections?: SummarySections; at: number; mtime: number; size: number }>()
   const lspCacheTtlMs = opts.lspCacheTtlMs ?? 300_000 // 5 minutes default
+  
+  // No-op AbortSignal for when no signal is provided
+  const noopAbortSignal: AbortSignal = {
+    aborted: false,
+    onabort: null,
+    reason: undefined,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => true,
+    throwIfAborted: () => {},
+  }
   
   function trackCost(kind: SummarizerKind, inputTokens: number, outputTokens: number): void {
     if (!opts.costTracking?.enabled) return
@@ -58,8 +72,16 @@ export function createSummarizationEngine(
     const interval = opts.costTracking.logIntervalMs ?? 60_000
     costLogTimer = setInterval(() => {
       if (stats.totalCostUsd > 0) {
-        log(`Cost summary: $${stats.totalCostUsd.toFixed(6)} (${stats.totalInputTokens} in / ${stats.totalOutputTokens} out tokens)`)
-        log(`  By summarizer: outline=${stats.costBySummarizer.outline.costUsd.toFixed(6)}, model=${stats.costBySummarizer.model.costUsd.toFixed(6)}, lsp=${stats.costBySummarizer.lsp.costUsd.toFixed(6)}`)
+        log.info("Cost summary", { 
+          totalCostUsd: stats.totalCostUsd.toFixed(6),
+          totalInputTokens: stats.totalInputTokens,
+          totalOutputTokens: stats.totalOutputTokens,
+          bySummarizer: {
+            outline: stats.costBySummarizer.outline.costUsd.toFixed(6),
+            model: stats.costBySummarizer.model.costUsd.toFixed(6),
+            lsp: stats.costBySummarizer.lsp.costUsd.toFixed(6),
+          }
+        })
       }
     }, interval)
   }
@@ -68,14 +90,8 @@ export function createSummarizationEngine(
     if (costLogTimer) clearTimeout(costLogTimer)
   }
 
-  function isSecret(rel: string): boolean {
-    const base = (rel.split("/").pop() ?? rel).toLowerCase()
-    if (base === ".env" || base.startsWith(".env.") || base.startsWith(".env-")) return true
-    const ext = "." + extOf(base)
-    if (SECRET_EXT.has(ext)) return true
-    const stem = base.includes(".") ? base.slice(0, base.lastIndexOf(".")) : base
-    if (SECRET_STEM.test(stem)) return ext === "." || SECRET_STEM_EXT.has(ext)
-    return false
+  function isSecretFile(rel: string): boolean {
+    return isSecret(rel)
   }
 
   function cleanupReverseDeps(rel: string): void {
@@ -88,17 +104,23 @@ export function createSummarizationEngine(
     }
   }
 
-  async function summarize(rel: string, force: boolean): Promise<void> {
+  async function summarize(rel: string, force: boolean, signal?: AbortSignal): Promise<void> {
     const summarizeStartMs = Date.now()
     const abs = path.join(root, rel)
     let st: Awaited<ReturnType<typeof fs.stat>>
     try {
       st = await fs.stat(abs)
-    } catch {
+    } catch (err) {
+      // File doesn't exist or stat failed - remove from cache
       if (cache.delete(rel)) {
         cleanupReverseDeps(rel)
-        try { await api.storage.remove(entryPrefix + rel) } catch {}
+        try {
+          await api.storage.remove(entryPrefix + rel)
+        } catch (storageErr) {
+          log.error("storage remove failed during cleanup", { rel, error: storageErr })
+        }
       }
+      log.error("stat failed", { rel, error: err })
       return
     }
     if (!st.isFile()) return
@@ -106,18 +128,12 @@ export function createSummarizationEngine(
     const prev = cache.get(rel)
     if (!force && prev && prev.mtimeMs === st.mtimeMs && prev.size === st.size) {
       // Cache hit
-      const metricsCollector = (globalThis as any).__workspaceMapMetricsCollector
-      if (metricsCollector) {
-        metricsCollector.recordCacheHit()
-      }
+      metricsCollector.recordCacheHit()
       return
     }
 
     // Cache miss
-    const metricsCollector = (globalThis as any).__workspaceMapMetricsCollector
-    if (metricsCollector) {
-      metricsCollector.recordCacheMiss()
-    }
+    metricsCollector.recordCacheMiss()
 
     // Per-extension max file size
     const ext = "." + extOf(rel)
@@ -159,7 +175,8 @@ export function createSummarizationEngine(
     let content: string
     try {
       content = await fs.readFile(abs, "utf8")
-    } catch {
+    } catch (err) {
+      log.error("read file failed", { rel, error: err })
       return
     }
     if (content.includes("\u0000")) {
@@ -187,10 +204,16 @@ export function createSummarizationEngine(
 
     // Try each summarizer in the fallback chain
     for (const summarizer of fallbackChain) {
+      // Check for cancellation
+      signal?.throwIfAborted?.()
+      
       let m: { summary: string; symbols: Array<{ name: string; kind?: string }>; imports: string[]; sections?: SummarySections } | undefined
 
       if (summarizer === "model") {
-        const modelResult = await modelSummary(rel, content, api, opts, log)
+        const modelResult = await raceCancellation(
+          modelSummary(rel, content, api, opts, log),
+          signal ?? noopAbortSignal
+        )
         if (modelResult) {
           m = { summary: modelResult.summary, symbols: modelResult.symbols.map(s => ({ name: s })), imports: [] }
           if (modelResult.inputTokens && modelResult.outputTokens) {
@@ -209,10 +232,13 @@ export function createSummarizationEngine(
             imports: cached.imports,
             sections: cached.sections,
           }
-          log(`lsp cache hit: ${rel}`)
+          log.debug("lsp cache hit", { rel })
         } else {
           // Cache miss - call LSP
-          m = await lspSummarize(rel, content, api, opts, stats, log)
+          m = await raceCancellation(
+            lspSummarize(rel, content, api, opts, stats, log),
+            signal ?? noopAbortSignal
+          )
           if (m) {
             // Store in cache
             lspCache.set(cacheKey, {
@@ -223,11 +249,14 @@ export function createSummarizationEngine(
               mtime: st.mtimeMs,
               size: st.size,
             })
-            log(`lsp cache miss (stored): ${rel}`)
+            log.debug("lsp cache miss (stored)", { rel })
           }
         }
       } else if (summarizer === "outline") {
-        m = await outlineSummarize(rel, content, opts, stats)
+        m = await raceCancellation(
+          outlineSummarize(rel, content, opts, stats),
+          signal ?? noopAbortSignal
+        )
       }
 
       if (m) {
@@ -240,13 +269,16 @@ export function createSummarizationEngine(
       if (summarizer === "lsp" && (pref.lspFallbackOnTimeout ?? true) && (pref.lspFallbackOnError ?? true)) {
         const nextIdx = fallbackChain.indexOf(summarizer) + 1
         const nextSummarizer = nextIdx < fallbackChain.length ? fallbackChain[nextIdx] : "outline"
-        log(`lsp fallback: ${rel} - falling back to ${nextSummarizer}`)
+        log.warn("lsp fallback", { rel, fallbackTo: nextSummarizer })
       }
     }
 
     // Ultimate fallback to outline if all else fails
     if (!result) {
-      result = await outlineSummarize(rel, content, opts, stats)
+      result = await raceCancellation(
+        outlineSummarize(rel, content, opts, stats),
+        signal ?? noopAbortSignal
+      )
       kind = "outline"
     }
 
@@ -257,9 +289,7 @@ export function createSummarizationEngine(
     else stats.outlineSummaries++
 
     // Record summarize metrics
-    if (metricsCollector) {
-      metricsCollector.recordSummarize(summarizeDurationMs, kind)
-    }
+    metricsCollector.recordSummarize(summarizeDurationMs, kind)
 
     // Update reverse dependency index
     if (opts.includeReverseDeps && result.imports.length > 0) {
@@ -292,23 +322,26 @@ export function createSummarizationEngine(
     }, cache, opts, log)
 
     // Update cache size metric
-    if (metricsCollector) {
-      metricsCollector.setCacheSize(cache.size)
-    }
+    metricsCollector.setCacheSize(cache.size)
   }
 
   // Priority queue for summarization jobs
   const priorityQueue = new PriorityQueue(opts.summarizeConcurrency, () => {
-    log("Summarization queue drained")
+    log.info("Summarization queue drained")
   })
+
+  let currentSignal: AbortSignal | undefined
 
   // Set the execute function for the priority queue
   priorityQueue.setExecuteFn(async (job) => {
-    await summarize(job.rel, job.force)
+    if (currentSignal?.aborted) return
+    await summarize(job.rel, job.force, currentSignal)
   })
 
-  async function summarizeMany(rels: string[], force: boolean, priority: SummarizationPriority = "background"): Promise<void> {
+  async function summarizeMany(rels: string[], force: boolean, priority: SummarizationPriority = "background", signal?: AbortSignal): Promise<void> {
     if (rels.length === 0) return
+    
+    currentSignal = signal
     
     const jobs = rels.map((rel) => ({
       rel,
@@ -324,8 +357,12 @@ export function createSummarizationEngine(
   }
 
   function waitForQueueDrain(queue: PriorityQueue): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const checkDrain = () => {
+        if (currentSignal?.aborted) {
+          reject(new DOMException("Operation cancelled", "AbortError"))
+          return
+        }
         if (queue.isEmpty()) {
           resolve()
         } else {
@@ -336,11 +373,18 @@ export function createSummarizationEngine(
     })
   }
 
+  async function shutdown(): Promise<void> {
+    stopCostLogging()
+    // Clear the queue
+    priorityQueue.clear()
+  }
+
   return {
     summarize,
     summarizeMany,
     trackCost,
     startCostLogging,
     stopCostLogging,
+    shutdown,
   }
 }

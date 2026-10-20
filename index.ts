@@ -26,7 +26,7 @@
 import { Plugin } from "@opencode/plugin"
 import type { Context, Cleanup } from "@opencode/plugin/promise/plugin"
 
-import { shutdownMetrics } from "./src/metrics/index.js"
+import { shutdownMetrics, isMetricsEnabled } from "./src/metrics/index.js"
 import { createWorkspaceMapTool } from "./src/tool/index.js"
 import { registerWatchCommand } from "./src/cli/index.js"
 import { setDisposed } from "./src/utils/enqueue.js"
@@ -46,8 +46,8 @@ export default Plugin.define({
     // Initialize plugin and get context
     const { ctx: pluginCtx, cleanup: baseCleanup } = await initializePlugin(ctx)
     
-    // Create engines
-    const logFn = (...args: unknown[]) => { if (pluginCtx.opts.debug) console.error("[workspace-map]", ...args) }
+    // Use structured logger from plugin context
+    const logFn = pluginCtx.logger
     
     // Dirty set for tracking changed files (must be created before engines that reference it)
     const dirty = new Set<string>()
@@ -63,7 +63,8 @@ export default Plugin.define({
       pluginCtx.stats,
       pluginCtx.filterCtx,
       logFn,
-      pluginCtx.project
+      pluginCtx.project,
+      pluginCtx.metricsCollector
     )
 
     // Tree cache wrapper for mutation
@@ -210,7 +211,7 @@ export default Plugin.define({
       summarizationEngine.stopCostLogging()
       injectionEngine.cleanup()
       await flushPendingWrites(pluginCtx.api, pluginCtx.locKey, pluginCtx.cache, pluginCtx.opts, logFn)
-      await shutdownMetrics()
+      await shutdownMetrics(pluginCtx.metricsCollector)
     }
   },
 })

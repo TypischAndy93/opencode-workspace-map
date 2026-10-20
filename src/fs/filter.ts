@@ -15,6 +15,8 @@ import {
   SECRET_STEM_EXT,
   TOP_LEVEL_IGNORES,
 } from "./gitignore.ts"
+import { extOf, isSecret, isBinary, isLockfile, isMinified } from "../utils/file.ts"
+import type { Logger } from "../utils/logger.ts"
 
 const MINIFIED_LINE_THRESHOLD = 500
 const LICENSE_HEADER_PATTERNS = [
@@ -85,7 +87,7 @@ export interface FilterContext {
   ignoreGlobs: RegExp[]
   generatedGlobs: RegExp[]
   gitignore: GitignoreRule[] | undefined
-  log: (...args: unknown[]) => void
+  log: Logger
   indexDotDirs: Set<string>
   DOT_DIR_ALLOW: Set<string>
   DOT_FILE_ALLOW: Set<string>
@@ -106,7 +108,7 @@ export function createFilterContext(
   stats: Stats,
   root: string,
   effectiveMaxFiles: number,
-  log: (...args: unknown[]) => void
+  log: Logger
 ): FilterContext {
   const ignoreSet = new Set([...opts.ignore, ...opts.ignoreExtra])
 
@@ -277,30 +279,15 @@ export function skipFile(ctx: FilterContext, rel: string): boolean {
   if (ctx.matchesGlobs(rel, ctx.includeGlobs)) return false
   const skip =
     (base.startsWith(".") && !ctx.DOT_FILE_ALLOW.has(base)) ||
-    ctx.LOCKFILES.has(base.toLowerCase()) ||
-    base.endsWith(".min.js") ||
-    base.endsWith(".min.css") ||
-    ctx.BINARY_EXT.has("." + extOf(rel)) ||
-    isSecret(ctx, rel) ||
+    isLockfile(base) ||
+    isMinified(rel) ||
+    isBinary(rel) ||
+    isSecret(rel) ||
     ctx.ignoreSet.has(base) ||
     ctx.matchesGlobs(rel, ctx.ignoreGlobs) ||
     ctx.isGenerated(rel)
   if (skip) ctx.stats.skippedByRule++
   return skip
-}
-
-export function isSecret(ctx: FilterContext, rel: string): boolean {
-  const base = (rel.split("/").pop() ?? rel).toLowerCase()
-  if (base === ".env" || base.startsWith(".env.") || base.startsWith(".env-")) return true
-  const ext = "." + extOf(base)
-  if (ctx.SECRET_EXT.has(ext)) return true
-  const stem = base.includes(".") ? base.slice(0, base.lastIndexOf(".")) : base
-  if (ctx.SECRET_STEM.test(stem)) return ext === "." || ctx.SECRET_STEM_EXT.has(ext)
-  return false
-}
-
-export function extOf(rel: string): string {
-  return path.extname(rel).toLowerCase().replace(/^\./, "")
 }
 
 export async function ensureGitignore(ctx: FilterContext): Promise<void> {
@@ -313,14 +300,15 @@ export async function ensureGitignore(ctx: FilterContext): Promise<void> {
     if ((err as { code?: string }).code === "ENOENT") {
       ctx.gitignore = []
     } else {
-      ctx.log("failed to read .gitignore", err)
+      ctx.log.error("failed to read .gitignore", { error: err })
       ctx.gitignore = []
     }
   }
 }
 
-export async function walk(ctx: FilterContext, dir: string, relDir: string, out: string[]): Promise<void> {
+export async function walk(ctx: FilterContext, dir: string, relDir: string, out: string[], signal?: AbortSignal): Promise<void> {
   if (out.length >= ctx.effectiveMaxFiles) return
+  signal?.throwIfAborted?.()
   
   // Track visited real paths to detect symlink cycles
   const visitedRealPaths = new Set<string>()
@@ -330,13 +318,13 @@ export async function walk(ctx: FilterContext, dir: string, relDir: string, out:
   try {
     realDir = await fs.realpath(dir)
   } catch (err) {
-    ctx.log("realpath failed", dir, err)
+    ctx.log.error("realpath failed", { dir, error: err })
     return
   }
   
   // Check if we've already visited this real path (cycle detection)
   if (visitedRealPaths.has(realDir)) {
-    ctx.log("symlink cycle detected, skipping", dir)
+    ctx.log.warn("symlink cycle detected, skipping", { dir })
     return
   }
   visitedRealPaths.add(realDir)
@@ -346,7 +334,7 @@ export async function walk(ctx: FilterContext, dir: string, relDir: string, out:
     // Use withFileTypes: true to get symlink info
     entries = await fs.readdir(dir, { withFileTypes: true })
   } catch (err) {
-    ctx.log("readdir failed", dir, err)
+    ctx.log.error("readdir failed", { dir, error: err })
     return
   }
 
@@ -357,6 +345,7 @@ export async function walk(ctx: FilterContext, dir: string, relDir: string, out:
 
   for (const entry of entries) {
     if (out.length >= ctx.effectiveMaxFiles) return
+    signal?.throwIfAborted?.()
     const name = typeof entry.name === "string" ? entry.name : (entry.name as Buffer).toString("utf8")
     const rel = relDir ? `${relDir}/${name}` : name
     
@@ -375,13 +364,13 @@ export async function walk(ctx: FilterContext, dir: string, relDir: string, out:
       try {
         targetPath = await fs.realpath(fullPath)
       } catch (err) {
-        ctx.log("failed to resolve symlink", fullPath, err)
+        ctx.log.error("failed to resolve symlink", { fullPath, error: err })
         continue
       }
       
       // Check for cycles
       if (visitedRealPaths.has(targetPath)) {
-        ctx.log("symlink cycle detected, skipping", fullPath)
+        ctx.log.warn("symlink cycle detected, skipping", { fullPath })
         continue
       }
       
@@ -390,7 +379,7 @@ export async function walk(ctx: FilterContext, dir: string, relDir: string, out:
       try {
         targetStat = await fs.stat(targetPath)
       } catch (err) {
-        ctx.log("failed to stat symlink target", targetPath, err)
+        ctx.log.error("failed to stat symlink target", { targetPath, error: err })
         continue
       }
       
@@ -417,26 +406,27 @@ export async function walk(ctx: FilterContext, dir: string, relDir: string, out:
   // Pass visitedRealPaths to recursive walks
   await Promise.all(
     dirsToWalk.map(({ dir, rel }) =>
-      semaphore.acquire(() => walkWithVisited(ctx, dir, rel, out, visitedRealPaths)),
+      semaphore.acquire(() => walkWithVisited(ctx, dir, rel, out, visitedRealPaths, signal)),
     ),
   )
 }
 
-async function walkWithVisited(ctx: FilterContext, dir: string, relDir: string, out: string[], visitedRealPaths: Set<string>): Promise<void> {
+async function walkWithVisited(ctx: FilterContext, dir: string, relDir: string, out: string[], visitedRealPaths: Set<string>, signal?: AbortSignal): Promise<void> {
   if (out.length >= ctx.effectiveMaxFiles) return
+  signal?.throwIfAborted?.()
   
   // Get real path of current directory for cycle detection
   let realDir: string
   try {
     realDir = await fs.realpath(dir)
   } catch (err) {
-    ctx.log("realpath failed", dir, err)
+    ctx.log.error("realpath failed", { dir, error: err })
     return
   }
   
   // Check if we've already visited this real path (cycle detection)
   if (visitedRealPaths.has(realDir)) {
-    ctx.log("symlink cycle detected, skipping", dir)
+    ctx.log.warn("symlink cycle detected, skipping", { dir })
     return
   }
   visitedRealPaths.add(realDir)
@@ -445,7 +435,7 @@ async function walkWithVisited(ctx: FilterContext, dir: string, relDir: string, 
   try {
     entries = await fs.readdir(dir, { withFileTypes: true })
   } catch (err) {
-    ctx.log("readdir failed", dir, err)
+    ctx.log.error("readdir failed", { dir, error: err })
     return
   }
 
@@ -456,6 +446,7 @@ async function walkWithVisited(ctx: FilterContext, dir: string, relDir: string, 
 
   for (const entry of entries) {
     if (out.length >= ctx.effectiveMaxFiles) return
+    signal?.throwIfAborted?.()
     const name = typeof entry.name === "string" ? entry.name : (entry.name as Buffer).toString("utf8")
     const rel = relDir ? `${relDir}/${name}` : name
     
@@ -472,12 +463,12 @@ async function walkWithVisited(ctx: FilterContext, dir: string, relDir: string, 
       try {
         targetPath = await fs.realpath(fullPath)
       } catch (err) {
-        ctx.log("failed to resolve symlink", fullPath, err)
+        ctx.log.error("failed to resolve symlink", { fullPath, error: err })
         continue
       }
       
       if (visitedRealPaths.has(targetPath)) {
-        ctx.log("symlink cycle detected, skipping", fullPath)
+        ctx.log.warn("symlink cycle detected, skipping", { fullPath })
         continue
       }
       
@@ -485,7 +476,7 @@ async function walkWithVisited(ctx: FilterContext, dir: string, relDir: string, 
       try {
         targetStat = await fs.stat(targetPath)
       } catch (err) {
-        ctx.log("failed to stat symlink target", targetPath, err)
+        ctx.log.error("failed to stat symlink target", { targetPath, error: err })
         continue
       }
       
@@ -511,7 +502,7 @@ async function walkWithVisited(ctx: FilterContext, dir: string, relDir: string, 
 
   await Promise.all(
     dirsToWalk.map(({ dir, rel }) =>
-      semaphore.acquire(() => walkWithVisited(ctx, dir, rel, out, visitedRealPaths)),
+      semaphore.acquire(() => walkWithVisited(ctx, dir, rel, out, visitedRealPaths, signal)),
     ),
   )
 }

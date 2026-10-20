@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
-import { skipDir, skipFile, isSecret, extOf, createFilterContext } from "../../src/fs/filter.js"
+import { skipDir, skipFile, createFilterContext } from "../../src/fs/filter.js"
+import { isSecret, extOf } from "../../src/utils/file.js"
 import { DEFAULT_OPTIONS, DEFAULT_IGNORES, type Options, type Stats } from "../../src/config/index.js"
 
 function createTestContext(overrides: Partial<Options> = {}): { ctx: any; stats: Stats } {
@@ -33,38 +34,33 @@ describe("filter", () => {
 
   describe("isSecret", () => {
     it("detects .env files", () => {
-      const { ctx } = createTestContext()
-      expect(isSecret(ctx, ".env")).toBe(true)
-      expect(isSecret(ctx, ".env.local")).toBe(true)
-      expect(isSecret(ctx, ".env-production")).toBe(true)
+      expect(isSecret(".env")).toBe(true)
+      expect(isSecret(".env.local")).toBe(true)
+      expect(isSecret(".env-production")).toBe(true)
     })
 
     it("detects secret extensions", () => {
-      const { ctx } = createTestContext()
-      expect(isSecret(ctx, "key.pem")).toBe(true)
-      expect(isSecret(ctx, "cert.key")).toBe(true)
-      expect(isSecret(ctx, "store.p12")).toBe(true)
+      expect(isSecret("key.pem")).toBe(true)
+      expect(isSecret("cert.key")).toBe(true)
+      expect(isSecret("store.p12")).toBe(true)
     })
 
     it("detects secret stem names", () => {
-      const { ctx } = createTestContext()
-      expect(isSecret(ctx, "id_rsa")).toBe(true)
-      expect(isSecret(ctx, "credentials")).toBe(true)
-      expect(isSecret(ctx, "secrets.json")).toBe(true)
-      expect(isSecret(ctx, "password.txt")).toBe(true)
-      expect(isSecret(ctx, "api_key.yaml")).toBe(true)
+      expect(isSecret("id_rsa")).toBe(true)
+      expect(isSecret("credentials")).toBe(true)
+      expect(isSecret("secrets.json")).toBe(true)
+      expect(isSecret("password.txt")).toBe(true)
+      expect(isSecret("api_key.yaml")).toBe(true)
     })
 
     it("allows normal files", () => {
-      const { ctx } = createTestContext()
-      expect(isSecret(ctx, "config.json")).toBe(false)
-      expect(isSecret(ctx, "main.ts")).toBe(false)
-      expect(isSecret(ctx, "README.md")).toBe(false)
+      expect(isSecret("config.json")).toBe(false)
+      expect(isSecret("main.ts")).toBe(false)
+      expect(isSecret("README.md")).toBe(false)
     })
 
     it("allows .env with code extension", () => {
-      const { ctx } = createTestContext()
-      expect(isSecret(ctx, "config.env.ts")).toBe(false)
+      expect(isSecret("config.env.ts")).toBe(false)
     })
   })
 

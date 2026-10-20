@@ -1,8 +1,9 @@
-import type { FileEntry, Options, Stats } from "../config/index.ts"
+import type { FileEntry, Options, Stats, Logger, StorageScanResult } from "../config/index.ts"
 import { computeCacheVersion } from "../config/index.ts"
 import type { Context } from "@opencode/plugin/promise/plugin"
 import { entryPrefix as ENTRY_PREFIX, LEGACY_PREFIX, REFRESH_CAP, TOOL_NAME } from "../config/index.ts"
 import { run as zstdRun } from "zstd-codec/lib/zstd-codec.js"
+import { withRetry, RETRY_PRESETS } from "../utils/retry.js"
 
 const COMPRESSION_THRESHOLD = 1024 // 1KB
 
@@ -38,18 +39,21 @@ export async function loadCache(
   api: Context,
   locKey: string,
   cache: Map<string, FileEntry>,
-  log: (...args: unknown[]) => void
+  log: Logger
 ): Promise<void> {
   const prefix = `loc/${locKey}/file/`
   let after: string | undefined
   let loaded = 0
   let skipped = 0
   for (;;) {
-    let page: any
+    let page: StorageScanResult | undefined
     try {
-      page = await api.storage.scan({ prefix, limit: 200, ...(after ? { after } : {}) })
+      page = await withRetry(
+        () => api.storage.scan({ prefix, limit: 200, ...(after ? { after } : {}) }),
+        RETRY_PRESETS.storage
+      )
     } catch (err) {
-      log("storage scan failed", err)
+      log.error("storage scan failed", { error: err })
       return
     }
     for (const entry of page?.entries ?? []) {
@@ -65,7 +69,7 @@ export async function loadCache(
             const decompressed = await decompressData(new Uint8Array(fileEntry.summary as any))
             fileEntry = { ...fileEntry, summary: Buffer.from(decompressed).toString("utf8"), compressed: false }
           } catch (err) {
-            log("decompression failed", rel, err)
+            log.error("decompression failed", { rel, error: err })
             continue
           }
         }
@@ -78,9 +82,12 @@ export async function loadCache(
           skipped++
           // Remove stale entry
           try {
-            await api.storage.remove(`loc/${locKey}/file/` + rel)
-          } catch {
-            /* ignore */
+            await withRetry(
+              () => api.storage.remove(`loc/${locKey}/file/` + rel),
+              RETRY_PRESETS.storage
+            )
+          } catch (err) {
+            log.error("storage remove stale entry failed", { rel, error: err })
           }
         }
       }
@@ -89,36 +96,43 @@ export async function loadCache(
     after = page.next
   }
   if (skipped > 0) {
-    log(`cache: loaded ${loaded} entries, skipped ${skipped} stale entries`)
+    log.info(`cache: loaded ${loaded} entries, skipped ${skipped} stale entries`)
   }
 }
 
 export async function migrateLegacy(
   api: Context,
-  log: (...args: unknown[]) => void
+  log: Logger
 ): Promise<void> {
   let after: string | undefined
   let removed = 0
   for (;;) {
-    let page: any
+    let page: StorageScanResult | undefined
     try {
-      page = await api.storage.scan({ prefix: "file/", limit: 200, ...(after ? { after } : {}) })
-    } catch {
+      page = await withRetry(
+        () => api.storage.scan({ prefix: "file/", limit: 200, ...(after ? { after } : {}) }),
+        RETRY_PRESETS.storage
+      )
+    } catch (err) {
+      log.error("storage scan failed during legacy migration", { error: err })
       return
     }
     const entries = page?.entries ?? []
     for (const entry of entries) {
       try {
-        await api.storage.remove(entry.key)
+        await withRetry(
+          () => api.storage.remove(entry.key),
+          RETRY_PRESETS.storage
+        )
         removed++
-      } catch {
-        /* ignore */
+      } catch (err) {
+        log.error("storage remove legacy entry failed", { key: entry.key, error: err })
       }
     }
     if (!page?.next) break
     after = page.next
   }
-  if (removed) log(`migrated ${removed} legacy cache entries`)
+  if (removed) log.info(`migrated ${removed} legacy cache entries`)
 }
 
 export async function saveEntry(
@@ -127,7 +141,7 @@ export async function saveEntry(
   entry: FileEntry,
   cache: Map<string, FileEntry>,
   opts: Options,
-  log: (...args: unknown[]) => void
+  log: Logger
 ): Promise<void> {
   // Add cache version for validation
   let entryWithVersion: FileEntry = {
@@ -145,7 +159,7 @@ export async function saveEntry(
         compressed: true,
       }
     } catch (err) {
-      log("compression failed", entry.rel, err)
+      log.error("compression failed", { rel: entry.rel, error: err })
     }
   }
   
@@ -157,16 +171,22 @@ export async function saveEntry(
     if (oldestKey) {
       cache.delete(oldestKey)
       try {
-        await api.storage.remove(`loc/${locKey}/file/` + oldestKey)
-      } catch {
-        /* ignore */
+        await withRetry(
+          () => api.storage.remove(`loc/${locKey}/file/` + oldestKey),
+          RETRY_PRESETS.storage
+        )
+      } catch (err) {
+        log.error("storage remove LRU entry failed", { rel: oldestKey, error: err })
       }
     }
   }
   try {
-    await api.storage.set(`loc/${locKey}/file/` + entry.rel, entryWithVersion as any)
+    await withRetry(
+      () => api.storage.set(`loc/${locKey}/file/` + entry.rel, entryWithVersion as any),
+      RETRY_PRESETS.storage
+    )
   } catch (err) {
-    log("storage set failed", entry.rel, err)
+    log.error("storage set failed", { rel: entry.rel, error: err })
   }
 }
 
@@ -190,7 +210,7 @@ export function scheduleBatchWrite(
   entry: FileEntry,
   cache: Map<string, FileEntry>,
   opts: Options,
-  log: (...args: unknown[]) => void
+  log: Logger
 ): void {
   // Update the in-memory cache immediately so readers (injection revision,
   // tool queries) observe fresh summaries without blocking on the batch flush.
@@ -215,7 +235,7 @@ async function flushBatchWrites(
   locKey: string,
   cache: Map<string, FileEntry>,
   opts: Options,
-  log: (...args: unknown[]) => void
+  log: Logger
 ): Promise<void> {
   const state = batchStates.get(locKey)
   if (!state) return
@@ -244,7 +264,7 @@ async function flushBatchWrites(
           compressed: true,
         }
       } catch (err) {
-        log("compression failed", entry.rel, err)
+        log.error("compression failed", { rel: entry.rel, error: err })
       }
     }
     
@@ -264,8 +284,13 @@ async function flushBatchWrites(
     if (oldestKey) {
       cache.delete(oldestKey)
       try {
-        await api.storage.remove(`loc/${locKey}/file/` + oldestKey)
-      } catch { /* ignore */ }
+        await withRetry(
+          () => api.storage.remove(`loc/${locKey}/file/` + oldestKey),
+          RETRY_PRESETS.storage
+        )
+      } catch (err) {
+        log.error("storage remove LRU entry failed", { rel: oldestKey, error: err })
+      }
     }
   }
   
@@ -274,11 +299,14 @@ async function flushBatchWrites(
     // Use Promise.all for concurrent writes
     await Promise.all(
       entriesToWrite.map(({ rel, entry }) => 
-        api.storage.set(`loc/${locKey}/file/` + rel, entry as any).catch(err => log("storage set failed", rel, err))
+        withRetry(
+          () => api.storage.set(`loc/${locKey}/file/` + rel, entry as any),
+          RETRY_PRESETS.storage
+        ).catch(err => log.error("storage set failed", { rel, error: err }))
       )
     )
   } catch (err) {
-    log("batch storage write failed", err)
+    log.error("batch storage write failed", { error: err })
   }
 }
 
@@ -288,7 +316,7 @@ export async function flushPendingWrites(
   locKey: string,
   cache: Map<string, FileEntry>,
   opts: Options,
-  log: (...args: unknown[]) => void
+  log: Logger
 ): Promise<void> {
   const state = batchStates.get(locKey)
   if (state?.timer) {
@@ -304,16 +332,20 @@ export async function pruneCache(
   api: Context,
   locKey: string,
   files: string[],
-  cache: Map<string, FileEntry>
+  cache: Map<string, FileEntry>,
+  log: Logger
 ): Promise<void> {
   const present = new Set(files)
   for (const rel of [...cache.keys()]) {
     if (!present.has(rel)) {
       cache.delete(rel)
       try {
-        await api.storage.remove(`loc/${locKey}/file/` + rel)
-      } catch {
-        /* ignore */
+        await withRetry(
+          () => api.storage.remove(`loc/${locKey}/file/` + rel),
+          RETRY_PRESETS.storage
+        )
+      } catch (err) {
+        log.error("storage remove pruned entry failed", { rel, error: err })
       }
     }
   }

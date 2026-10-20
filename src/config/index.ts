@@ -13,11 +13,13 @@ import type {
   Stats,
   ProjectInfo,
   MonorepoPackage,
+  PackageJson,
   WorkspaceMapInput,
   SymbolInfo,
   SummarySections,
   SymbolRule,
   GitignoreRule,
+  StorageScanResult,
 } from "./types.ts"
 
 import {
@@ -80,6 +82,9 @@ import {
   SECRET_STEM_EXT,
 } from "../shared.ts"
 
+import { createLogger, createNoOpLogger, type Logger, type LogLevel, generateCorrelationId } from "../utils/logger.ts"
+import { extOf, isSecret, isBinary, isLockfile, isMinified } from "../utils/file.ts"
+
 export type {
   SummarizerKind,
   InjectMode,
@@ -92,11 +97,13 @@ export type {
   Stats,
   ProjectInfo,
   MonorepoPackage,
+  PackageJson,
   WorkspaceMapInput,
   SymbolInfo,
   SummarySections,
   SymbolRule,
   GitignoreRule,
+  StorageScanResult,
 }
 
 export { DEFAULT_IGNORES, CODE_EXT, DATA_EXT, WRITE_TOOLS, TOOL_NAME, REFRESH_CAP, CACHE_VERSION, computeCacheVersion } from "./types.ts"
@@ -110,7 +117,43 @@ export { GENERIC_CODE_SYMBOL_RULES } from "../summarizers/languages/generic.ts"
 
 export { entryPrefix, LEGACY_PREFIX, locKey } from "../utils/hash.ts"
 
+export { createLogger, createNoOpLogger, type Logger, type LogLevel, generateCorrelationId, withCorrelationId, withCorrelationIdAsync } from "../utils/logger.ts"
+export { isSecret, isBinary, isLockfile, isMinified, extOf } from "../utils/file.ts"
+export {
+  WorkspaceMapError,
+  ConfigError,
+  ConfigNotFoundError,
+  ConfigValidationError,
+  SummarizationError,
+  StorageError,
+  WatchError,
+  LspError,
+  FileError,
+  WalkError,
+  InjectionError,
+  InternalError,
+  type ErrorCode,
+  isWorkspaceMapError,
+  hasErrorCode,
+  getErrorCode,
+} from "../utils/errors.ts"
+
+export type {
+  CancellationToken,
+  createCancellationToken,
+  createCancellationTokenWithTimeout,
+  raceCancellation,
+  withCancellation,
+  createAbortSignal,
+  isAbortError,
+  isCancelledError,
+} from "../utils/cancellation.ts"
+
+export type { SummarizationPriority } from "../utils/priority-queue.ts"
+
 export type { PluginContext } from "../setup.ts"
+export type { Storage, VcsProvider, FileWatcher, Summarizer, LspClient, PluginApi } from "../interfaces.ts"
+export { MetricsCollector, NoOpMetricsCollector, createMetricsCollector, initializeMetrics, shutdownMetrics } from "../metrics/index.ts"
 
 export function familyOf(ext: string): "js" | "py" | "go" | "rust" | "jvm" | "code" | "data" | "other" {
   if (["ts", "tsx", "js", "jsx", "mjs", "cjs", "vue", "svelte"].includes(ext)) return "js"
@@ -568,9 +611,4 @@ export async function detectOptimalWalkConcurrency(root: string, log: (msg: stri
     log(`auto-tune: walk concurrency detection failed, using default: ${err}`)
     return DEFAULT_OPTIONS.walkConcurrency as number
   }
-}
-
-export function extOf(rel: string): string {
-  const i = rel.lastIndexOf(".")
-  return i >= 0 ? rel.slice(i + 1).toLowerCase() : ""
 }

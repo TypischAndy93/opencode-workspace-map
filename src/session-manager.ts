@@ -1,4 +1,4 @@
-import type { Options, LogFn } from "./config/index.ts"
+import type { Options, Logger } from "./config/index.ts"
 
 export interface SessionManager {
   recordRecent(sessionID: string | undefined, rel: string): void
@@ -15,7 +15,7 @@ export function createSessionManager(
   sessionsWithInitialWalk: Set<string>,
   dirty: Set<string>,
   flushTimer: { current: ReturnType<typeof setTimeout> | undefined },
-  log: LogFn,
+  log: Logger,
   flushCallback: (rels: string[]) => Promise<void>
 ): SessionManager {
 
@@ -66,7 +66,7 @@ export function createSessionManager(
         try {
           await flushCallback(batch)
         } catch (err) {
-          log("flush failed", err)
+          log.error("flush failed", { error: err })
         }
       })()
     }, debounceMs)

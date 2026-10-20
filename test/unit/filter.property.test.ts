@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import fc from "fast-check"
-import { skipDir, skipFile, isSecret, extOf, createFilterContext } from "../../src/fs/filter.js"
+import { skipDir, skipFile, createFilterContext } from "../../src/fs/filter.js"
+import { isSecret, extOf } from "../../src/utils/file.js"
 import { DEFAULT_OPTIONS, type Options, type Stats } from "../../src/config/index.js"
 
 function createTestContext(overrides: Partial<Options> = {}): { ctx: any; stats: Stats } {
@@ -55,9 +56,8 @@ describe("Property-based tests for filter", () => {
     it("should be idempotent", () => {
       fc.assert(
         fc.property(fc.string({ minLength: 1, maxLength: 100 }), (rel) => {
-          const { ctx } = createTestContext()
-          const result1 = isSecret(ctx, rel)
-          const result2 = isSecret(ctx, rel)
+          const result1 = isSecret(rel)
+          const result2 = isSecret(rel)
           expect(result1).toBe(result2)
           return true
         }),
@@ -68,10 +68,9 @@ describe("Property-based tests for filter", () => {
     it("should always detect .env files", () => {
       fc.assert(
         fc.property(fc.string({ minLength: 1, maxLength: 50 }).filter(s => !s.startsWith(".") && !s.includes("/") && !s.includes(" ")), (name) => {
-          const { ctx } = createTestContext()
-          expect(isSecret(ctx, ".env")).toBe(true)
-          expect(isSecret(ctx, `.env.${name}`)).toBe(true)
-          expect(isSecret(ctx, `.env-${name}`)).toBe(true)
+          expect(isSecret(".env")).toBe(true)
+          expect(isSecret(`.env.${name}`)).toBe(true)
+          expect(isSecret(`.env-${name}`)).toBe(true)
           return true
         }),
         { numRuns: 100 }
@@ -86,9 +85,8 @@ describe("Property-based tests for filter", () => {
           fc.string({ minLength: 1, maxLength: 30 })
             .filter(s => !s.includes("/") && !s.includes(" ") && !s.includes("\\") && !s.includes(":")),
           (name) => {
-            const { ctx } = createTestContext()
             for (const ext of secretExts) {
-              expect(isSecret(ctx, `${name}${ext}`)).toBe(true)
+              expect(isSecret(`${name}${ext}`)).toBe(true)
             }
             return true
           }
@@ -102,8 +100,7 @@ describe("Property-based tests for filter", () => {
       
       fc.assert(
         fc.property(fc.constantFrom(...secretStems), (stem) => {
-          const { ctx } = createTestContext()
-          expect(isSecret(ctx, stem)).toBe(true)
+          expect(isSecret(stem)).toBe(true)
           return true
         }),
         { numRuns: 100 }
@@ -274,21 +271,19 @@ describe("Property-based tests for filter", () => {
     })
 
     it("should skip secret files", () => {
-      const { ctx } = createTestContext()
-      
       // .env files
-      expect(isSecret(ctx, ".env")).toBe(true)
-      expect(isSecret(ctx, ".env.local")).toBe(true)
-      expect(isSecret(ctx, ".env-production")).toBe(true)
+      expect(isSecret(".env")).toBe(true)
+      expect(isSecret(".env.local")).toBe(true)
+      expect(isSecret(".env-production")).toBe(true)
       
       // Secret extensions
-      expect(isSecret(ctx, "key.pem")).toBe(true)
-      expect(isSecret(ctx, "cert.key")).toBe(true)
+      expect(isSecret("key.pem")).toBe(true)
+      expect(isSecret("cert.key")).toBe(true)
       
       // Secret stems
-      expect(isSecret(ctx, "id_rsa")).toBe(true)
-      expect(isSecret(ctx, "credentials")).toBe(true)
-      expect(isSecret(ctx, "secrets.json")).toBe(true)
+      expect(isSecret("id_rsa")).toBe(true)
+      expect(isSecret("credentials")).toBe(true)
+      expect(isSecret("secrets.json")).toBe(true)
     })
 
     it("should NOT skip normal code files", () => {

@@ -1,9 +1,21 @@
 ﻿import type { Context } from "@opencode/plugin/promise/plugin"
-import type { Options, FileEntry, Stats } from "./config/index.ts"
-import { relsFromInput } from "./utils/tool-input.js"
+import type { Options, FileEntry, Stats, Logger } from "./config/index.ts"
+import type { MetricsCollector, NoOpMetricsCollector } from "./metrics/index.ts"
+import { relsFromInput, type ToolInput } from "./utils/tool-input.js"
 import { WRITE_TOOLS } from "./config/index.js"
 
-export type LogFn = (...args: unknown[]) => void
+type MetricsCollectorLike = MetricsCollector | NoOpMetricsCollector
+
+interface ToolExecuteEvent {
+  tool?: unknown
+  input?: ToolInput
+  sessionID?: string
+}
+
+interface SessionContextEvent {
+  sessionID?: string
+  system?: Array<{ type: string; text: string }>
+}
 
 export interface HooksManager {
   setupRefreshOnWriteHook(
@@ -13,7 +25,7 @@ export interface HooksManager {
     disposed: { current: boolean },
     pendingWrites: { rels: string[]; sessionID?: string }[],
     markDirty: (sessionID: string | undefined, rel: string, debounceMs: number) => void,
-    log: LogFn
+    log: Logger
   ): void
 
   setupSessionContextHook(
@@ -22,8 +34,8 @@ export interface HooksManager {
     broadRoot: boolean,
     disposed: { current: boolean },
     getInjection: (sessionID: string | undefined) => Promise<string>,
-    log: LogFn,
-    metricsCollector: any
+    log: Logger,
+    metricsCollector: MetricsCollectorLike
   ): void
 
   setupWarmup(
@@ -36,8 +48,8 @@ export interface HooksManager {
     summarizeMany: (rels: string[], force: boolean) => Promise<void>,
     cache: Map<string, FileEntry>,
     stats: Stats,
-    log: LogFn,
-    metricsCollector: any
+    log: Logger,
+    metricsCollector: MetricsCollectorLike
   ): void
 }
 
@@ -46,22 +58,22 @@ export function createHooksManager(): HooksManager {
     setupRefreshOnWriteHook(api, opts, root, disposed, pendingWrites, markDirty, log) {
       if (!opts.refreshOnWrite) return
 
-      api.tool.hook("execute.before", (event: any) => {
+      api.tool.hook("execute.before", (event) => {
         if (disposed.current) return
         const tool = String(event?.tool ?? "").toLowerCase()
         if (!WRITE_TOOLS.has(tool)) return
-        const rels = relsFromInput(event?.input, root)
+        const rels = relsFromInput(event?.input as ToolInput, root)
         if (rels.length) {
           pendingWrites.push({ rels, sessionID: event?.sessionID })
           if (pendingWrites.length > 20) pendingWrites.shift()
         }
       })
 
-      api.tool.hook("execute.after", (event: any) => {
+      api.tool.hook("execute.after", (event) => {
         if (disposed.current) return
         const tool = String(event?.tool ?? "").toLowerCase()
         if (!WRITE_TOOLS.has(tool)) return
-        let rels = relsFromInput(event?.input, root)
+        let rels = relsFromInput(event?.input as ToolInput, root)
         let sessionID: string | undefined = event?.sessionID
         if (!rels.length) {
           const popped = pendingWrites.shift()
@@ -77,16 +89,16 @@ export function createHooksManager(): HooksManager {
     setupSessionContextHook(api, opts, broadRoot, disposed, getInjection, log, metricsCollector) {
       if (opts.inject === "off" || broadRoot) return
 
-      if (opts.debug) console.error("[workspace-map] registering session.context hook")
-      api.session.hook("context", async (event: any) => {
+      log.debug("registering session.context hook")
+      api.session.hook("context", async (event: SessionContextEvent) => {
         if (disposed.current) return
         try {
           const text = await getInjection(event?.sessionID)
           if (text) {
-            event.system.push({ type: "text", text })
+            event.system?.push({ type: "text", text })
           }
         } catch (err) {
-          log("injection failed", err)
+          log.error("injection failed", { error: err })
           if (metricsCollector) {
             metricsCollector.recordError("injection")
           }
@@ -112,7 +124,7 @@ export function createHooksManager(): HooksManager {
           for (const rel of target.slice(0, opts.warmupSummaries)) if (!cache.has(rel)) await summarizeMany([rel], false)
           stats.warmups++
         } catch (err) {
-          log("warmup failed", err)
+          log.error("warmup failed", { error: err })
           if (metricsCollector) {
             metricsCollector.recordError("warmup")
           }

@@ -1,9 +1,9 @@
 import type { Context, Cleanup } from "@opencode/plugin/promise/plugin"
-import type { Options, ProjectInfo, Stats, FileEntry, SummarizerKind, LogFn } from "./config/index.ts"
+import type { Options, ProjectInfo, Stats, FileEntry, SummarizerKind, Logger } from "./config/index.ts"
 import * as path from "node:path"
 import * as os from "node:os"
 import { loadSidecarConfig, validateOptions, detectProject, autoTuneOptions, detectOptimalWalkConcurrency, mergeOptions } from "./config/index.js"
-import { initializeMetrics, shutdownMetrics, getMetricsCollector } from "./metrics/index.js"
+import { createMetricsCollector, initializeMetrics, shutdownMetrics, isMetricsEnabled, MetricsCollector, NoOpMetricsCollector } from "./metrics/index.js"
 import { createFilterContext } from "./fs/filter.js"
 import { loadCache, migrateLegacy } from "./storage/cache.js"
 import { createWorkspaceMapTool } from "./tool/index.js"
@@ -12,6 +12,7 @@ import { setDisposed } from "./utils/enqueue.js"
 import { locKey, entryPrefix } from "./utils/hash.js"
 import { createSemaphore } from "./utils/semaphore.js"
 import { globToRegex } from "./fs/gitignore.js"
+import { createLogger, generateCorrelationId } from "./utils/logger.js"
 
 export interface PluginContext {
   api: Context
@@ -41,11 +42,13 @@ export interface PluginContext {
   broadRoot: boolean
   effectiveMaxFiles: number
   project: ProjectInfo
-  metricsCollector: ReturnType<typeof getMetricsCollector> | null
+  metricsCollector: MetricsCollector | NoOpMetricsCollector
   filterCtx: ReturnType<typeof createFilterContext>
   listFiles: (force: boolean) => Promise<string[]>
   getChangedFilesCached: () => Promise<string[]>
   summarizeMany: (rels: string[], force: boolean) => Promise<void>
+  logger: Logger
+  correlationId: string
 }
 
 export async function initializePlugin(api: Context): Promise<{ ctx: PluginContext; cleanup: Cleanup }> {
@@ -56,18 +59,28 @@ export async function initializePlugin(api: Context): Promise<{ ctx: PluginConte
 
   const root: string = path.resolve(api.location?.directory ?? api.location?.project?.directory ?? process.cwd())
 
+  // Create structured logger (must precede any code that logs, so the
+  // auto-tune/validation callbacks below can reference it safely)
+  const logger = createLogger({
+    level: opts.logging?.level ?? "info",
+    format: opts.logging?.format ?? "text",
+    component: "workspace-map",
+  })
+
+  // Generate initial correlation ID for this plugin instance
+  const correlationId = generateCorrelationId()
+
   // Auto-tune options based on project type
   const project = await detectProject(root)
-  const logFn: LogFn = (...args: unknown[]) => { if (opts.debug) console.error("[workspace-map]", ...args) }
-  autoTuneOptions(opts, project, (msg) => logFn(msg))
+  autoTuneOptions(opts, project, (msg) => logger.info(msg))
   
   // Auto-detect optimal walk concurrency if set to "auto"
   if (opts.walkConcurrency === "auto" && opts.autoTune) {
-    const optimalConcurrency = await detectOptimalWalkConcurrency(root, (msg) => logFn(msg))
+    const optimalConcurrency = await detectOptimalWalkConcurrency(root, (msg) => logger.info(msg))
     opts.walkConcurrency = optimalConcurrency
   }
 
-  validateOptions(opts, (msg) => logFn(msg))
+  validateOptions(opts, (msg) => logger.warn(msg))
 
   const lk = locKey(root)
   const ENTRY_PREFIX = entryPrefix(lk)
@@ -121,8 +134,9 @@ export async function initializePlugin(api: Context): Promise<{ ctx: PluginConte
   const sessionsWithInitialWalk = new Set<string>()
 
   // Initialize metrics if enabled
-  const metricsCollector = await initializeMetrics(opts)
-  if (metricsCollector) {
+  const metricsCollector = createMetricsCollector(opts)
+  await initializeMetrics(metricsCollector)
+  if (isMetricsEnabled(metricsCollector)) {
     metricsCollector.setCacheSize(cache.size)
   }
 
@@ -143,7 +157,7 @@ export async function initializePlugin(api: Context): Promise<{ ctx: PluginConte
     root.toLowerCase() === path.dirname(home).toLowerCase()
   const effectiveMaxFiles = broadRoot && !opts.allowBroadRoot ? Math.min(opts.maxFiles, 800) : opts.maxFiles
 
-  const filterCtx = await createFilterContext(opts, stats, root, effectiveMaxFiles, logFn)
+  const filterCtx = await createFilterContext(opts, stats, root, effectiveMaxFiles, logger)
 
   // Register CLI commands
   registerCLICommands({
@@ -156,7 +170,7 @@ export async function initializePlugin(api: Context): Promise<{ ctx: PluginConte
     listFiles: async () => [], // placeholder, will be set later
     summarizeMany: async () => {}, // placeholder
     getChangedFilesCached: async () => [], // placeholder
-    log: logFn,
+    log: logger,
     project,
     broadRoot,
     entryPrefix: ENTRY_PREFIX,
@@ -167,8 +181,8 @@ export async function initializePlugin(api: Context): Promise<{ ctx: PluginConte
   })
 
   // Load cache
-  await loadCache(api, lk, cache, logFn)
-  void migrateLegacy(api, logFn).catch(() => undefined)
+  await loadCache(api, lk, cache, logger)
+  void migrateLegacy(api, logger).catch(() => undefined)
 
   const ctx: PluginContext = {
     api,
@@ -204,23 +218,25 @@ export async function initializePlugin(api: Context): Promise<{ ctx: PluginConte
     listFiles: async () => { throw new Error("listFiles not initialized") },
     getChangedFilesCached: async () => { throw new Error("getChangedFilesCached not initialized") },
     summarizeMany: async () => { throw new Error("summarizeMany not initialized") },
+    logger,
+    correlationId,
   }
 
   if (!opts.enabled) {
     return {
       ctx,
-      cleanup: async () => { 
-        ctx.disposed = true; 
-        setDisposed(true); 
-        if (ctx.flushTimer) clearTimeout(ctx.flushTimer) 
+      cleanup: async () => {
+        ctx.disposed = true
+        setDisposed(true)
+        if (ctx.flushTimer) clearTimeout(ctx.flushTimer)
         if (ctx.costLogTimer) clearTimeout(ctx.costLogTimer)
-        await shutdownMetrics()
+        await shutdownMetrics(ctx.metricsCollector)
       }
     }
   }
 
   if (broadRoot && !opts.allowBroadRoot) {
-    if (opts.debug) console.error(`[workspace-map] broad root detected (${root}); disabling warmup and injection`)
+    logger.warn("broad root detected; disabling warmup and injection", { root })
   }
 
   return { ctx, cleanup: async () => {} } // actual cleanup will be set by hooks

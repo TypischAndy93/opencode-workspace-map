@@ -1,9 +1,29 @@
 import { metrics, MetricAttributes, Meter } from "@opentelemetry/api"
 import { MeterProvider, PeriodicExportingMetricReader, ConsoleMetricExporter } from "@opentelemetry/sdk-metrics"
+import type { PushMetricExporter } from "@opentelemetry/sdk-metrics"
 import { resourceFromAttributes } from "@opentelemetry/resources"
 import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions"
 import type { Options } from "../config/index.ts"
 import { VERSION } from "../version.ts"
+
+/**
+ * No-op metrics collector for testing or when metrics are disabled.
+ */
+export class NoOpMetricsCollector {
+  readonly enabled = false
+  
+  recordWalk(_fileCount: number, _durationMs: number): void {}
+  recordSummarize(_durationMs: number, _kind: string): void {}
+  recordCacheHit(): void {}
+  recordCacheMiss(): void {}
+  recordInjection(_sizeChars: number, _type: "full" | "digest"): void {}
+  recordError(_type: string): void {}
+  recordWatchBatch(_fileCount: number): void {}
+  setCacheSize(_size: number): void {}
+  incrementActiveSummarizations(): void {}
+  decrementActiveSummarizations(): void {}
+  async shutdown(): Promise<void> {}
+}
 
 /**
  * OpenTelemetry metrics for workspace-map plugin observability.
@@ -12,6 +32,7 @@ import { VERSION } from "../version.ts"
 export class MetricsCollector {
   private meter: Meter
   private enabled: boolean
+  private readonly exportIntervalMs: number
   private meterProvider: MeterProvider | null = null
 
   // Counters
@@ -34,6 +55,7 @@ export class MetricsCollector {
 
   constructor(opts: Options) {
     this.enabled = opts.metrics?.enabled ?? false
+    this.exportIntervalMs = opts.metrics?.intervalMs ?? 60000
     this.meter = metrics.getMeter("workspace-map", VERSION)
   }
 
@@ -45,10 +67,10 @@ export class MetricsCollector {
     const { OTLPMetricExporter } = await import("@opentelemetry/exporter-metrics-otlp-proto")
 
     const exporter = this.getExporter()
-    const intervalMs = 60000 // default
+    const intervalMs = this.exportIntervalMs
 
     const reader = new PeriodicExportingMetricReader({
-      exporter,
+      exporter: exporter as PushMetricExporter,
       exportIntervalMillis: intervalMs,
     })
 
@@ -68,11 +90,8 @@ export class MetricsCollector {
     this.createInstruments()
   }
 
-  private getExporter(): any {
-    // Dynamic import to avoid loading if not enabled
+  private getExporter(): PushMetricExporter | null {
     if (this.enabled) {
-      // Default to console exporter
-      const { ConsoleMetricExporter } = require("@opentelemetry/sdk-metrics")
       return new ConsoleMetricExporter()
     }
     return null
@@ -208,25 +227,25 @@ export class MetricsCollector {
   }
 }
 
-// Singleton instance
-let metricsCollector: MetricsCollector | null = null
-
-export function getMetricsCollector(opts?: Options): MetricsCollector | null {
-  if (!opts?.metrics?.enabled) return null
-  if (!metricsCollector) {
-    metricsCollector = new MetricsCollector(opts!)
+// Factory function - no singleton
+export function createMetricsCollector(opts: Options): MetricsCollector | NoOpMetricsCollector {
+  if (!opts.metrics?.enabled) {
+    return new NoOpMetricsCollector()
   }
-  return metricsCollector
+  return new MetricsCollector(opts)
 }
 
-export async function initializeMetrics(opts: Options): Promise<MetricsCollector | null> {
-  const collector = getMetricsCollector(opts)
-  if (collector) {
+export async function initializeMetrics(collector: MetricsCollector | NoOpMetricsCollector): Promise<void> {
+  if (collector instanceof MetricsCollector) {
     await collector.initialize()
   }
-  return collector
 }
 
-export function shutdownMetrics(): Promise<void> {
-  return metricsCollector?.shutdown() ?? Promise.resolve()
+export async function shutdownMetrics(collector: MetricsCollector | NoOpMetricsCollector): Promise<void> {
+  await collector.shutdown()
+}
+
+// Type guard
+export function isMetricsEnabled(collector: MetricsCollector | NoOpMetricsCollector): collector is MetricsCollector {
+  return collector instanceof MetricsCollector
 }

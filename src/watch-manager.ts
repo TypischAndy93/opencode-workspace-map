@@ -1,9 +1,7 @@
-import type { Options, FileEntry } from "./config/index.ts"
+import type { Options, FileEntry, Logger } from "./config/index.ts"
 import { globToRegex } from "./fs/gitignore.ts"
 import * as path from "node:path"
 import * as fs from "node:fs/promises"
-
-export type LogFn = (...args: unknown[]) => void
 
 /** Debounce strategy: "fixed" uses a constant delay, "adaptive" adapts to how
  *  often a file changes, "coalesce" groups rapid changes within a window. */
@@ -40,7 +38,7 @@ export interface WatchManagerDeps {
   reverseDeps: Map<string, Set<string>>
   listFiles: (force: boolean) => Promise<string[]>
   summarizeMany: (rels: string[], force: boolean) => Promise<void>
-  log: LogFn
+  log: Logger
   metricsCollector?: MetricsCollectorLike | null
 }
 
@@ -122,18 +120,18 @@ export function createWatchManager(
 
     const startMs = Date.now()
     onBatchStart?.(batch.length)
-    log(`watch: batch summarizing ${batch.length} files: ${batch.join(", ")}`)
+    log.info("watch: batch summarizing", { count: batch.length, files: batch })
     metricsCollector?.recordWatchBatch?.(batch.length)
 
     summarizeMany(batch, true)
-      .catch((err) => log("watch: batch summarize failed", err))
+      .catch((err) => log.error("watch: batch summarize failed", { error: err }))
       .finally(() => {
         onBatchComplete?.(batch.length, Date.now() - startMs)
       })
 
     if (once) {
       stop()
-      log("Watch completed (once mode)")
+      log.info("Watch completed (once mode)")
     }
   }
 
@@ -183,12 +181,12 @@ export function createWatchManager(
         const pendingTimeout = setTimeout(async () => {
           pending.delete(rel)
           if (cache.has(rel)) {
-            log(`watch: file changed: ${rel}`)
+            log.debug("watch: file changed", { rel })
             await summarizeMany([rel], true)
           }
           if (once) {
             stop()
-            log("Watch completed (once mode)")
+            log.info("Watch completed (once mode)")
           }
         }, debounceTime)
         pending.set(rel, pendingTimeout)
@@ -228,12 +226,12 @@ export function createWatchManager(
           const timeout = setTimeout(async () => {
             pending.delete(rel)
             if (cache.has(rel)) {
-              log(`watch: file changed: ${rel}`)
+              log.debug("watch: file changed", { rel })
               await summarizeMany([rel], true)
             }
             if (once) {
               stop()
-              log("Watch completed (once mode)")
+              log.info("Watch completed (once mode)")
             }
           }, debounceTime)
           pending.set(rel, timeout)
@@ -254,10 +252,11 @@ export function createWatchManager(
       if (eventType === "change" || eventType === "rename") {
         scheduleBatch(rel)
       }
-    } catch (err: any) {
-      if (err.code === "ENOENT") {
+    } catch (err: unknown) {
+      const errnoErr = err as NodeJS.ErrnoException
+      if (errnoErr.code === "ENOENT") {
         if (cache.delete(rel)) {
-          log(`watch: file deleted: ${rel}`)
+          log.debug("watch: file deleted", { rel })
           for (const [, importers] of reverseDeps.entries()) {
             if (importers.has(rel)) importers.delete(rel)
           }
@@ -278,7 +277,7 @@ export function createWatchManager(
 
         for (const rel of currentFiles) {
           if (!lastKnownFiles!.has(rel)) {
-            log(`watch: new file detected via polling: ${rel}`)
+            log.debug("watch: new file detected via polling", { rel })
             scheduleBatch(rel)
           }
         }
@@ -286,7 +285,7 @@ export function createWatchManager(
         for (const rel of lastKnownFiles!) {
           if (!currentFiles.has(rel)) {
             if (cache.delete(rel)) {
-              log(`watch: deleted file detected via polling: ${rel}`)
+              log.debug("watch: deleted file detected via polling", { rel })
               for (const [, importers] of reverseDeps.entries()) {
                 if (importers.has(rel)) importers.delete(rel)
               }
@@ -296,7 +295,7 @@ export function createWatchManager(
 
         lastKnownFiles = currentFiles
       } catch (err) {
-        log("watch: polling error", err)
+        log.error("watch: polling error", { error: err })
       }
     }, POLL_INTERVAL)
   }
@@ -313,23 +312,26 @@ export function createWatchManager(
         if (eventType === "change" || eventType === "rename") {
           const rel = filename
           if (pattern && !pattern.test(rel)) return
-          handleFileChange(rel, eventType).catch((err) => log("watch: handler failed", err))
+          handleFileChange(rel, eventType).catch((err) => log.error("watch: handler failed", { error: err }))
         }
       })
     } catch (err) {
       // fs.watch(recursive) is unsupported on some platforms (e.g. Linux) —
       // fall back to polling-only rather than crashing.
-      log("watch: fs.watch unavailable, falling back to polling only", err)
+      log.warn("watch: fs.watch unavailable, falling back to polling only", { error: err })
       watcher = null
     }
 
     await startPolling()
 
-    log(
-      `watch: watching ${root}${pattern ? ` (pattern: ${pattern.source})` : ""}` +
-        `${once ? " (once mode)" : ""}${batchChanges ? " (batched)" : ""}` +
-        ` (debounce: ${debounceMs}ms, strategy: ${debounceStrategy}) + polling`
-    )
+    log.info("watch: watching", {
+      root,
+      pattern: pattern?.source,
+      once,
+      batchChanges,
+      debounceMs,
+      debounceStrategy,
+    })
   }
 
   function stop() {
@@ -351,7 +353,7 @@ export function createWatchManager(
       }
       watcher = null
     }
-    log("watch: stopped")
+    log.info("watch: stopped")
     if (resolveStopped) {
       resolveStopped()
       resolveStopped = null

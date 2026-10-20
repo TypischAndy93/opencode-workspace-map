@@ -1,7 +1,8 @@
-import { extOf, familyOf } from "../config/index.ts"
+import { extOf, familyOf, type SummarySectionConfig } from "../config/index.ts"
 import { leadingDoc, extractTodos, extractPurpose } from "./doc-comments.ts"
 import { collectImports } from "./imports.ts"
 import { collectSymbols, getSymbolRules, collectSymbolsForFile } from "./symbols.ts"
+import type { SummarySections, SymbolInfo } from "../config/types.ts"
 
 /**
  * Shared utilities for summarization.
@@ -63,15 +64,20 @@ export function dataSummary(content: string, ext: string): { summary: string; sy
 /**
  * Summarize code files with symbols, imports, and structured sections.
  */
-export function codeSummary(content: string, ext: string, sectionConfig?: any, maxLength?: number): { summary: string; symbols: Array<{ name: string; kind?: string }>; imports: string[]; sections?: any } {
+export function codeSummary(
+  content: string,
+  ext: string,
+  sectionConfig?: SummarySectionConfig,
+  maxLength?: number
+): { summary: string; symbols: SymbolInfo[]; imports: string[]; sections?: SummarySections } {
   const lines = content.split(/\r?\n/)
   // Use extension directly to get correct language-specific rules
   const { exports, locals } = collectSymbolsForFile(lines, ext)
   const family = familyOf(ext)
   const imports = collectImports(content, family)
-  
+
   // Build structured sections
-  const sections: any = {}
+  const sections: SummarySections = {}
   
   const includePurpose = sectionConfig?.includePurpose ?? true
   const includeKeyExports = sectionConfig?.includeKeyExports ?? true

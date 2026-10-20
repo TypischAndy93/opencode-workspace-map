@@ -10,8 +10,8 @@ describe("summarize-utils", () => {
       expect(extOf("file.ts")).toBe("ts")
       expect(extOf("path/to/file.js")).toBe("js")
       expect(extOf("file")).toBe("")
-      // .hidden files have extension "hidden"
-      expect(extOf(".hidden")).toBe("hidden")
+      // .hidden files have no extension (path.extname returns "")
+      expect(extOf(".hidden")).toBe("")
       expect(extOf("archive.tar.gz")).toBe("gz")
     })
   })

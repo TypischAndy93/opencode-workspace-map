@@ -1,4 +1,4 @@
-import type { Options, FileEntry, Stats, WorkspaceMapInput } from "../config/index.ts"
+import type { Options, FileEntry, Stats, WorkspaceMapInput, Logger, ProjectInfo } from "../config/index.ts"
 import type { Context } from "@opencode/plugin/promise/plugin"
 import { TOOL_NAME } from "../config/index.ts"
 import { renderTree, renderJson, buildTree, convertToImmutable, createMutableNode, addPathToMutableNode } from "../injection/render.ts"
@@ -20,8 +20,8 @@ export interface CLICommandsContext {
   listFiles: (force: boolean) => Promise<string[]>
   summarizeMany: (rels: string[], force: boolean) => Promise<void>
   getChangedFilesCached: () => Promise<string[]>
-  log: (...args: unknown[]) => void
-  project: any
+  log: Logger
+  project: ProjectInfo | null
   broadRoot: boolean
   entryPrefix: string
   filesCache: { at: number; files: string[] }
@@ -39,13 +39,13 @@ export function registerWatchCommand(
   reverseDeps: Map<string, Set<string>>,
   listFiles: (force: boolean) => Promise<string[]>,
   summarizeMany: (rels: string[], force: boolean) => Promise<void>,
-  log: (...args: unknown[]) => void
+  log: Logger
 ): void {
   if (!api.command?.transform) {
-    log("command domain not available, skipping watch command registration")
+    log.warn("command domain not available, skipping watch command registration")
     return
   }
-  api.command.transform((editor: { add: (cmd: any) => void }) => {
+  (api.command.transform as (fn: (editor: any) => void) => void)((editor) => {
     editor.add({
       name: "workspace-map:watch",
       description: "Watch workspace for file changes and update summaries in real-time",
@@ -65,18 +65,7 @@ export function registerWatchCommand(
         },
         additionalProperties: false,
       },
-      execute: async function(input: {
-        debounceMs?: number;
-        pattern?: string;
-        once?: boolean;
-        batchChanges?: boolean;
-        batchTimeoutMs?: number;
-        smartDebounce?: boolean;
-        minDebounceMs?: number;
-        maxDebounceMs?: number;
-        debounceStrategy?: "fixed" | "adaptive" | "coalesce";
-        coalesceWindowMs?: number;
-      } = {}) {
+      execute: async function(input: any = {}) {
         const manager = createWatchManager(
           { root, cache, reverseDeps, listFiles, summarizeMany, log },
           opts,
@@ -90,7 +79,7 @@ export function registerWatchCommand(
           return
         }
 
-        log("Watch started. Press Ctrl+C to stop.")
+        log.info("Watch started. Press Ctrl+C to stop.")
         await new Promise<void>((resolve) => {
           process.on("SIGINT", () => {
             manager.stop()
@@ -115,11 +104,11 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
   const reverseDepsRef = reverseDeps
   
   if (!api.command?.transform) {
-    log("command domain not available, skipping CLI commands registration")
+    log.warn("command domain not available, skipping CLI commands registration")
     return
   }
   
-  api.command.transform((editor: { add: (cmd: any) => void }) => {
+  (api.command.transform as (fn: (editor: any) => void) => void)((editor) => {
     // workspace-map:dump - Output full workspace map to stdout
     editor.add({
       name: "workspace-map:dump",
@@ -133,7 +122,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         },
         additionalProperties: false,
       },
-      execute: async (input: { format?: "tree" | "json"; limit?: number; query?: string } = {}) => {
+      execute: async (input: any = {}) => {
         try {
           const files = await listFiles(true)
           const changed = await getChangedFilesCached()
@@ -155,7 +144,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
             text = await buildFullMapping(
               api, opts, stats, cache, reverseDeps, root, broadRoot, 
               undefined, listFiles, getChangedFilesCached, summarizeMany, 
-              new Map(), new Map(), project, filterCtx.isGenerated
+              new Map(), new Map(), project ?? { isMonorepo: false, monorepoType: null, packages: [], primaryLanguage: null, framework: null, packageManager: null, hasTypeScript: false, hasTests: false }, filterCtx.isGenerated
             )
           }
           
@@ -163,7 +152,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
           console.log(text)
           return { content: `Workspace map dumped (${filteredFiles.length} files, format: ${input.format ?? "tree"})` }
         } catch (err) {
-          log("dump failed", err)
+          log.error("dump failed", { error: err })
           throw err
         }
       },
@@ -180,7 +169,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         },
         additionalProperties: false,
       },
-      execute: async (input: { format?: "text" | "json" } = {}) => {
+      execute: async (input: any = {}) => {
         const cacheEntries = cache.size
         const totalFiles = stats.files
         const totalSummaries = stats.summaries
@@ -334,7 +323,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         },
         additionalProperties: false,
       },
-      execute: async (input: { verbose?: boolean } = {}) => {
+      execute: async (input: any = {}) => {
         const issues: string[] = []
         const warnings: string[] = []
         const info: string[] = []
@@ -421,7 +410,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         required: ["confirm"],
         additionalProperties: false,
       },
-      execute: async (input: { confirm: boolean }) => {
+      execute: async (input: any) => {
         if (!input.confirm) {
           throw new Error("Cache clearing requires confirmation. Run with --confirm=true")
         }
@@ -438,7 +427,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         vcsCache.at = 0
         vcsCache.files = []
         
-        log(`Cleared ${cleared} cache entries`)
+        log.info(`Cleared ${cleared} cache entries`)
         
         const text = `✅ Cache cleared (${cleared} entries removed). Next injection will trigger full re-index.`
         console.log(text)
@@ -459,7 +448,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         },
         additionalProperties: false,
       },
-      execute: async (input: { output?: string; format?: "json"; overwrite?: boolean } = {}) => {
+      execute: async (input: any = {}) => {
         try {
           const files = await listFiles(true)
           const changed = await getChangedFilesCached()
@@ -470,8 +459,9 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
             try {
               await fs.stat(outputPath)
               throw new Error(`File already exists: ${outputPath}. Use --overwrite=true to overwrite.`)
-            } catch (err: any) {
-              if (err.code !== "ENOENT") throw err
+            } catch (err: unknown) {
+              const errnoErr = err as NodeJS.ErrnoException
+              if (errnoErr.code !== "ENOENT") throw err
             }
           }
           
@@ -489,7 +479,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
           console.log(text)
           return { content: text, path: outputPath, fileCount: files.length }
         } catch (err) {
-          log("export failed", err)
+          log.error("export failed", { error: err })
           throw err
         }
       },
@@ -507,7 +497,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         },
         additionalProperties: false,
       },
-      execute: async (input: { input?: string; merge?: boolean } = {}) => {
+      execute: async (input: any = {}) => {
         try {
           const inputPath = input.input ?? path.join(root, ".opencode", "workspace-map.json")
           
@@ -563,7 +553,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
           console.log(text)
           return { content: text, importedFiles, importedSummaries }
         } catch (err) {
-          log("import failed", err)
+          log.error("import failed", { error: err })
           throw err
         }
       },
@@ -581,7 +571,7 @@ export function registerCLICommands(ctx: CLICommandsContext): void {
         },
         additionalProperties: false,
       },
-      execute: async (input: { output?: string; overwrite?: boolean } = {}) => {
+      execute: async (input: any = {}) => {
         const { stdin, stdout } = process
         const readline = await import("node:readline/promises")
         

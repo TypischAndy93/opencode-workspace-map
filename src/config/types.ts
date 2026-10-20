@@ -47,6 +47,18 @@ export type InjectMode = "off" | "tree" | "changed" | "full"
 export type InjectStrategy = "first" | "changed" | "always"
 export type WalkConcurrency = number | "auto"
 
+export type LogLevel = "debug" | "info" | "warn" | "error"
+
+export interface Logger {
+  debug(message: string, context?: Record<string, unknown>): void
+  info(message: string, context?: Record<string, unknown>): void
+  warn(message: string, context?: Record<string, unknown>): void
+  error(message: string, context?: Record<string, unknown>, error?: Error): void
+  child(context: Record<string, unknown>): Logger
+  setLevel(level: LogLevel): void
+  getLevel(): LogLevel
+}
+
 export type LogFn = (...args: unknown[]) => void
 
 export interface FileEntry {
@@ -153,6 +165,12 @@ export interface Options {
     exporter?: "console" | "otlp"
     intervalMs?: number
   }
+  // Logging configuration
+  logging?: {
+    level?: LogLevel
+    format?: "text" | "json"
+    includeCorrelationId?: boolean
+  }
   // Generated file detection
   autoDetectGenerated?: boolean
   generatedPatterns?: string[]
@@ -184,10 +202,31 @@ export interface ProjectInfo {
   hasTests: boolean
 }
 
+/**
+ * Minimal package.json structure for monorepo package detection.
+ * Extend as needed for additional fields.
+ */
+export interface PackageJson {
+  name?: string
+  version?: string
+  private?: boolean
+  workspaces?: string[] | { packages: string[] }
+  dependencies?: Record<string, string>
+  devDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
+  optionalDependencies?: Record<string, string>
+  scripts?: Record<string, string>
+  main?: string
+  module?: string
+  types?: string
+  exports?: Record<string, unknown>
+  [key: string]: unknown
+}
+
 export interface MonorepoPackage {
   name: string
   path: string
-  packageJson: any
+  packageJson: PackageJson
   language: string | null
 }
 
@@ -338,6 +377,12 @@ export const DEFAULT_OPTIONS: Options = {
     exporter: "console",
     intervalMs: 30_000,
   },
+  // Logging configuration
+  logging: {
+    level: "info",
+    format: "text",
+    includeCorrelationId: true,
+  },
   // Batch storage writes
   cacheFlushIntervalMs: 5000,
   // Adaptive walk concurrency
@@ -399,4 +444,14 @@ export const DEFAULT_OPTIONS: Options = {
     outputTokenPriceUsd: 0.000006,  // $6.00 per 1M tokens (approximate)
     logIntervalMs: 60_000,
   },
+}
+
+export interface StorageScanEntry {
+  key: string
+  value: unknown
+}
+
+export interface StorageScanResult {
+  readonly entries: ReadonlyArray<StorageScanEntry>
+  next?: string
 }

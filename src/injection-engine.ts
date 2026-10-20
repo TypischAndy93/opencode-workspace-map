@@ -1,5 +1,8 @@
 import type { Context } from "@opencode/plugin/promise/plugin"
-import type { Options, FileEntry, Stats, ProjectInfo } from "./config/index.ts"
+import type { Options, FileEntry, Stats, ProjectInfo, Logger, SummarizationPriority } from "./config/index.ts"
+import type { MetricsCollector, NoOpMetricsCollector } from "./metrics/index.ts"
+
+type MetricsCollectorLike = MetricsCollector | NoOpMetricsCollector
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { getChangedFiles } from "./fs/vcs.js"
@@ -8,15 +11,15 @@ import { renderTree, convertToImmutable, createMutableNode, addPathToMutableNode
 import { createFilterContext, ensureGitignore, walk } from "./fs/filter.js"
 import { extOf, locKey } from "./config/index.js"
 import { pruneCache } from "./storage/cache.js"
-
-export type LogFn = (...args: unknown[]) => void
+import { isCancelledError, raceCancellation } from "./utils/cancellation.js"
 
 export interface InjectionEngine {
-  listFiles(force: boolean): Promise<string[]>
-  getInjection(sessionID: string | undefined): Promise<string>
-  getChangedFilesCached(): Promise<string[]>
-  detectGit(): Promise<boolean>
+  listFiles(force: boolean, signal?: AbortSignal): Promise<string[]>
+  getInjection(sessionID: string | undefined, signal?: AbortSignal): Promise<string>
+  getChangedFilesCached(signal?: AbortSignal): Promise<string[]>
+  detectGit(signal?: AbortSignal): Promise<boolean>
   cleanup(): void
+  shutdown(): Promise<void>
 }
 
 export function createInjectionEngine(
@@ -30,16 +33,16 @@ export function createInjectionEngine(
   broadRoot: boolean,
   effectiveMaxFiles: number,
   sessionsWithInitialWalk: Set<string>,
-  log: LogFn,
+  log: Logger,
   project: ProjectInfo,
   filesCache: { at: number; files: string[] },
   vcsCache: { at: number; files: string[] },
   treeCache: { current: ReturnType<typeof createMutableNode> | null },
-  summarizeMany: (rels: string[], force: boolean) => Promise<void>,
+  summarizeMany: (rels: string[], force: boolean, priority?: SummarizationPriority, signal?: AbortSignal) => Promise<void>,
   recentBySession: Map<string, Map<string, number>>,
   recentGlobal: Map<string, number>,
   injectionState: Map<string, { rev: string }>,
-  metricsCollector: any,
+  metricsCollector: MetricsCollectorLike,
   dirtyRef: { current: Set<string> }
 ): InjectionEngine {
 
@@ -82,7 +85,12 @@ export function createInjectionEngine(
 
     if (newConcurrency !== currentConcurrency) {
       opts.walkConcurrency = newConcurrency
-      log(`adaptive walk: concurrency ${currentConcurrency} → ${newConcurrency} (median latency: ${medianLatency.toFixed(2)}ms/file, target: ${targetLatency}ms)`)
+      log.info("adaptive walk: concurrency adjusted", { 
+        from: currentConcurrency, 
+        to: newConcurrency, 
+        medianLatencyMs: medianLatency.toFixed(2), 
+        targetLatencyMs: targetLatency 
+      })
     }
   }
 
@@ -97,13 +105,25 @@ export function createInjectionEngine(
   }
 
   let vcsCacheLocal = vcsCache
+  let shutdownSignal: AbortSignal | undefined
+  
+  // No-op AbortSignal for when no signal is provided
+  const noopAbortSignal: AbortSignal = {
+    aborted: false,
+    onabort: null,
+    reason: undefined,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => true,
+    throwIfAborted: () => {},
+  }
 
-  async function listFiles(force: boolean): Promise<string[]> {
+  async function listFiles(force: boolean, signal?: AbortSignal): Promise<string[]> {
     if (!force && Date.now() - filesCache.at < opts.treeTtlMs) return filesCache.files
     await ensureGitignore(filterCtx)
     const out: string[] = []
     const t0 = Date.now()
-    await walk(filterCtx, root, "", out)
+    await walk(filterCtx, root, "", out, signal)
     const walkDurationMs = Date.now() - t0
     out.sort()
 
@@ -168,27 +188,32 @@ export function createInjectionEngine(
           }
         }
       }
-      await pruneCache(api, (await import("./utils/hash.js")).locKey(root), out, cache)
+      await pruneCache(api, (await import("./utils/hash.js")).locKey(root), out, cache, log)
     }
     return out
   }
 
-  async function getChangedFilesCached(): Promise<string[]> {
+  async function getChangedFilesCached(signal?: AbortSignal): Promise<string[]> {
     if (vcsCacheLocal.at && Date.now() - vcsCacheLocal.at < 2_000) return vcsCacheLocal.files
-    const files = await getChangedFiles(api, root, (input: unknown) => {
-      if (typeof input !== "string" || !input.trim()) return undefined
-      const abs = path.isAbsolute(input) ? input : path.resolve(root, input)
-      const rel = path.relative(root, abs)
-      if (!rel || rel.startsWith("..")) return undefined
-      return rel.split(path.sep).join("/")
-    })
+    const files = await raceCancellation(
+      getChangedFiles(api, root, (input: unknown) => {
+        if (typeof input !== "string" || !input.trim()) return undefined
+        const abs = path.isAbsolute(input) ? input : path.resolve(root, input)
+        const rel = path.relative(root, abs)
+        if (!rel || rel.startsWith("..")) return undefined
+        return rel.split(path.sep).join("/")
+      }),
+      signal ?? noopAbortSignal
+    )
     vcsCacheLocal = { at: Date.now(), files }
     return files
   }
 
-  async function detectGit(): Promise<boolean> {
+  async function detectGit(signal?: AbortSignal): Promise<boolean> {
     let dir = root
     for (let i = 0; i < 8; i++) {
+      // Check for cancellation
+      signal?.throwIfAborted?.()
       try {
         await fs.stat(path.join(dir, ".git"))
         return true
@@ -201,11 +226,11 @@ export function createInjectionEngine(
     return false
   }
 
-  async function getInjection(sessionID: string | undefined): Promise<string> {
+  async function getInjection(sessionID: string | undefined, signal?: AbortSignal): Promise<string> {
     if (opts.inject === "off" || broadRoot) return ""
     const key = sessionID ?? "<anonymous>"
-    const changed = await getChangedFilesCached()
-    const gitRepo = await detectGit()
+    const changed = await getChangedFilesCached(signal)
+    const gitRepo = await detectGit(signal)
     const needFresh = !filesCache.at || Date.now() - filesCache.at >= opts.treeTtlMs
     const changeSignal = dirtyRef.current?.size > 0 || changed.length > 0
 
@@ -218,7 +243,7 @@ export function createInjectionEngine(
       sessionsWithInitialWalk.add(sessionID)
     }
 
-    const files = shouldWalk ? await listFiles(false) : filesCache.files
+    const files = shouldWalk ? await listFiles(false, signal) : filesCache.files
     const rev = buildInjectionRev(files, changed, cache)
     const prev = injectionState.get(key)
     const sendFull =
@@ -227,14 +252,17 @@ export function createInjectionEngine(
       (opts.injectStrategy === "changed" && prev.rev !== rev)
 
     if (opts.debug) {
-      console.error(`[workspace-map] getInjection: key=${key}, injectStrategy=${opts.injectStrategy}, sendFull=${sendFull}, prev=${prev ? "yes" : "no"}, rev=${rev}`)
+      log.debug("getInjection", { key, injectStrategy: opts.injectStrategy, sendFull, prev: prev ? "yes" : "no", rev })
     }
 
     let text: string
     const injectionType = sendFull ? "full" : "digest"
     if (sendFull) {
       const tree = treeCache.current ? convertToImmutable(treeCache.current) : undefined
-      text = await buildFullMapping(api, opts, stats, cache, reverseDeps, root, broadRoot, sessionID, listFiles, getChangedFilesCached, summarizeMany, recentBySession, recentGlobal, project, filterCtx.isGenerated, tree)
+      text = await raceCancellation(
+        buildFullMapping(api, opts, stats, cache, reverseDeps, root, broadRoot, sessionID, listFiles, getChangedFilesCached, summarizeMany, recentBySession, recentGlobal, project, filterCtx.isGenerated, tree),
+        signal ?? noopAbortSignal
+      )
       stats.fullInjections++
     } else {
       text = buildDigest(files, changed, cache, broadRoot)
@@ -252,12 +280,19 @@ export function createInjectionEngine(
     return text
   }
 
+  async function shutdown(): Promise<void> {
+    stopAdaptiveWalkAdjustment()
+    // Cancel any pending operations
+    shutdownSignal = undefined
+  }
+
   return {
     listFiles,
     getInjection,
     getChangedFilesCached,
     detectGit,
     cleanup: stopAdaptiveWalkAdjustment,
+    shutdown,
   }
 
   // Start adaptive walk concurrency adjustment

@@ -1,5 +1,23 @@
-import type { Options, FileEntry, Stats, SummarySections } from "../config/index.ts"
+import type { Options, FileEntry, Stats, SummarySections, Logger, LspClient } from "../config/index.ts"
 import type { Context } from "@opencode/plugin/promise/plugin"
+import { withRetry, RETRY_PRESETS } from "../utils/retry.js"
+import { extOf, isSecret } from "../utils/file.ts"
+
+interface LspDocumentSymbolParams {
+  textDocument: { uri: string }
+}
+
+interface LspDocumentSymbolResult {
+  name: string
+  kind: number
+  children?: LspDocumentSymbolResult[]
+  deprecated?: boolean
+}
+
+interface LspHoverParams {
+  textDocument: { uri: string }
+  position: { line: number; character: number }
+}
 
 export async function lspSummarize(
   rel: string,
@@ -7,7 +25,7 @@ export async function lspSummarize(
   api: Context,
   opts: Options,
   stats: Stats,
-  log: (...args: unknown[]) => void
+  log: Logger
 ): Promise<{ summary: string; symbols: Array<{ name: string; kind?: string }>; imports: string[]; sections?: SummarySections } | undefined> {
   if (isSecret(rel)) return undefined
 
@@ -31,7 +49,7 @@ export async function lspSummarize(
       imports,
     }
   } catch (err) {
-    log("lsp summary failed", rel, err)
+    log.error("lsp summary failed", { rel, error: err })
     return undefined
   }
 }
@@ -40,31 +58,43 @@ async function getLSPSymbols(
   rel: string,
   api: Context,
   opts: Options,
-  log: (...args: unknown[]) => void
+  log: Logger
 ): Promise<string[]> {
+  // Check if LSP is available on the context
+  const lsp = (api as unknown as { lsp?: LspClient }).lsp
+  if (!lsp?.documentSymbols) {
+    log.debug("LSP not available, skipping symbols")
+    return []
+  }
+
   try {
-    // Check if LSP is available on the context
-    const lsp = (api as any).lsp
-    if (!lsp?.documentSymbols) {
-      log("LSP not available, skipping symbols")
-      return []
-    }
+    const result = await withRetry(
+      async () => {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), opts.lspTimeoutMs ?? 5000)
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), opts.lspTimeoutMs ?? 5000)
+        try {
+          const result = await lsp.documentSymbols(
+            { textDocument: { uri: `file://${rel}` } } as LspDocumentSymbolParams,
+            { signal: controller.signal }
+          )
 
-    const result = await lsp.documentSymbols({
-      textDocument: { uri: `file://${rel}` },
-    }, { signal: controller.signal })
-
-    clearTimeout(timeout)
+          clearTimeout(timeout)
+          return result
+        } catch (err) {
+          clearTimeout(timeout)
+          throw err
+        }
+      },
+      RETRY_PRESETS.lsp
+    )
 
     if (!result) return []
 
     const symbols: string[] = []
     const maxSymbols = opts.lspMaxSymbols ?? 50
 
-    function extractSymbols(items: any[]) {
+    function extractSymbols(items: LspDocumentSymbolResult[]) {
       for (const item of items) {
         if (symbols.length >= maxSymbols) break
         if (item.name && typeof item.name === "string") {
@@ -79,11 +109,11 @@ async function getLSPSymbols(
       }
     }
 
-    extractSymbols(result)
+    extractSymbols(result as LspDocumentSymbolResult[])
     return [...new Set(symbols)].slice(0, maxSymbols)
   } catch (err) {
-    if ((err as any)?.name !== "AbortError") {
-      log("lsp documentSymbols failed", rel, err)
+    if ((err as Error)?.name !== "AbortError") {
+      log.error("lsp documentSymbols failed", { rel, error: err })
     }
     return []
   }
@@ -93,52 +123,41 @@ async function getLSPImports(
   rel: string,
   api: Context,
   opts: Options,
-  log: (...args: unknown[]) => void
+  log: Logger
 ): Promise<string[]> {
+  // Check if LSP is available on the context
+  const lsp = (api as unknown as { lsp?: LspClient }).lsp
+  if (!lsp?.hover) {
+    log.debug("LSP not available, skipping imports")
+    return []
+  }
+
   try {
-    // Check if LSP is available on the context
-    const lsp = (api as any).lsp
-    if (!lsp?.hover) {
-      log("LSP not available, skipping imports")
-      return []
-    }
+    await withRetry(
+      async () => {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), opts.lspTimeoutMs ?? 5000)
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), opts.lspTimeoutMs ?? 5000)
+        try {
+          await lsp.hover(
+            { textDocument: { uri: `file://${rel}` }, position: { line: 0, character: 0 } } as LspHoverParams,
+            { signal: controller.signal }
+          )
 
-    // Try to get imports via LSP - this depends on the LSP implementation
-    // Some LSPs support textDocument/references or textDocument/definition
-    // For now, we'll use a simple approach: get the document and parse imports
-    // This is a fallback - LSP doesn't have a standard "get imports" method
-    const result = await lsp.hover({
-      textDocument: { uri: `file://${rel}` },
-      position: { line: 0, character: 0 },
-    }, { signal: controller.signal })
+          clearTimeout(timeout)
+        } catch (err) {
+          clearTimeout(timeout)
+          throw err
+        }
+      },
+      RETRY_PRESETS.lsp
+    )
 
-    clearTimeout(timeout)
     return []
   } catch (err) {
-    if ((err as any)?.name !== "AbortError") {
-      log("lsp imports failed", rel, err)
+    if ((err as Error)?.name !== "AbortError") {
+      log.error("lsp imports failed", { rel, error: err })
     }
     return []
   }
-}
-
-function extOf(rel: string): string {
-  const i = rel.lastIndexOf(".")
-  return i >= 0 ? rel.slice(i + 1).toLowerCase() : ""
-}
-
-function isSecret(rel: string): boolean {
-  const base = (rel.split("/").pop() ?? rel).toLowerCase()
-  if (base === ".env" || base.startsWith(".env.") || base.startsWith(".env-")) return true
-  const ext = "." + extOf(base)
-  const SECRET_EXT = new Set([".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".asc", ".gpg", ".ppk", ".kdbx", ".der"])
-  if (SECRET_EXT.has(ext)) return true
-  const stem = base.includes(".") ? base.slice(0, base.lastIndexOf(".")) : base
-  const SECRET_STEM = /^(\.netrc|\.npmrc|\.pypirc|\.htpasswd|env|credentials|secrets?|token|tokens|password|passwd|private[_-]?key|api[_-]?key|apikey|id_rsa|id_dsa|id_ecdsa|id_ed25519|keystore|adbkey)$/i
-  const SECRET_STEM_EXT = new Set([".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".properties", ".txt", ".sh", ".xml", ".csv", ".log"])
-  if (SECRET_STEM.test(stem)) return ext === "." || SECRET_STEM_EXT.has(ext)
-  return false
 }
