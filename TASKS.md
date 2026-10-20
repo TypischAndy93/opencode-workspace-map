@@ -110,9 +110,9 @@
 - [x] Rust (syn) (rust.ts, already registered)
 
 ### 16. Daemon Watch Mode
-- [ ] `--daemon` flag for `workspace-map:watch`
-- [ ] `--pid-file` for process management
-- [ ] Pause during agent execution
+- [x] `--daemon` flag for `workspace-map:watch`
+- [x] `--pid-file` for process management
+- [x] Pause during agent execution
 
 ### 17. Health Check & Profiling
 - [ ] `action: "health"` tool endpoint
