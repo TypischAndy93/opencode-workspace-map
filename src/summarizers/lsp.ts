@@ -10,6 +10,8 @@ interface LspDocumentSymbolParams {
 interface LspDocumentSymbolResult {
   name: string
   kind: number
+  range?: { start: { line: number; character: number }; end: { line: number; character: number } }
+  selectionRange?: { start: { line: number; character: number }; end: { line: number; character: number } }
   children?: LspDocumentSymbolResult[]
   deprecated?: boolean
 }
@@ -19,6 +21,13 @@ interface LspHoverParams {
   position: { line: number; character: number }
 }
 
+interface LspSymbolLocation {
+  name: string
+  kind?: string
+  line?: number
+  character?: number
+}
+
 export async function lspSummarize(
   rel: string,
   content: string,
@@ -26,7 +35,7 @@ export async function lspSummarize(
   opts: Options,
   stats: Stats,
   log: Logger
-): Promise<{ summary: string; symbols: Array<{ name: string; kind?: string }>; imports: string[]; sections?: SummarySections } | undefined> {
+): Promise<{ summary: string; symbols: Array<{ name: string; kind?: string; line?: number; character?: number }>; imports: string[]; sections?: SummarySections } | undefined> {
   if (isSecret(rel)) return undefined
 
   const ext = extOf(rel)
@@ -40,12 +49,12 @@ export async function lspSummarize(
     if (!symbols.length && !imports.length) return undefined
 
     const bits = [`${ext} file`, `${content.split(/\r?\n/).length} lines`]
-    if (symbols.length) bits.push(`exports: ${symbols.slice(0, 12).join(", ")}`)
+    if (symbols.length) bits.push(`exports: ${symbols.slice(0, 12).map(s => s.name).join(", ")}`)
     if (imports.length) bits.push(`imports: ${imports.slice(0, 8).join(", ")}`)
 
     return {
       summary: bits.join(" · "),
-      symbols: symbols.map(s => ({ name: s })),
+      symbols: symbols.map(s => ({ name: s.name, kind: s.kind })),
       imports,
     }
   } catch (err) {
@@ -59,7 +68,7 @@ async function getLSPSymbols(
   api: Context,
   opts: Options,
   log: Logger
-): Promise<string[]> {
+): Promise<LspSymbolLocation[]> {
   // Check if LSP is available on the context
   const lsp = (api as unknown as { lsp?: LspClient }).lsp
   if (!lsp?.documentSymbols) {
@@ -91,7 +100,7 @@ async function getLSPSymbols(
 
     if (!result) return []
 
-    const symbols: string[] = []
+    const symbols: LspSymbolLocation[] = []
     const maxSymbols = opts.lspMaxSymbols ?? 50
 
     function extractSymbols(items: LspDocumentSymbolResult[]) {
@@ -102,7 +111,13 @@ async function getLSPSymbols(
           // Filter for exported-like symbols (functions, classes, interfaces, etc.)
           const exportedKinds = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]
           if (exportedKinds.includes(kind) || item.deprecated !== true) {
-            symbols.push(item.name)
+            const location = item.selectionRange ?? item.range
+            symbols.push({
+              name: item.name,
+              kind: LSP_SYMBOL_KIND[kind],
+              line: location?.start.line,
+              character: location?.start.character,
+            })
           }
         }
         if (item.children) extractSymbols(item.children)
@@ -110,13 +125,43 @@ async function getLSPSymbols(
     }
 
     extractSymbols(result as LspDocumentSymbolResult[])
-    return [...new Set(symbols)].slice(0, maxSymbols)
+    return symbols
   } catch (err) {
     if ((err as Error)?.name !== "AbortError") {
       log.error("lsp documentSymbols failed", { rel, error: err })
     }
     return []
   }
+}
+
+// LSP SymbolKind -> our SymbolInfo kind mapping
+const LSP_SYMBOL_KIND: Record<number, string> = {
+  1: "file",
+  2: "module",
+  3: "namespace",
+  4: "package",
+  5: "class",
+  6: "method",
+  7: "property",
+  8: "field",
+  9: "constructor",
+  10: "enum",
+  11: "interface",
+  12: "function",
+  13: "variable",
+  14: "constant",
+  15: "string",
+  16: "number",
+  17: "boolean",
+  18: "array",
+  19: "object",
+  20: "key",
+  21: "null",
+  22: "enummember",
+  23: "struct",
+  24: "event",
+  25: "operator",
+  26: "typeparameter",
 }
 
 async function getLSPImports(

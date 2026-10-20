@@ -51,6 +51,8 @@ export interface Summarizer {
 export interface LspDocumentSymbol {
   name: string
   kind: number
+  range?: { start: { line: number; character: number }; end: { line: number; character: number } }
+  selectionRange?: { start: { line: number; character: number }; end: { line: number; character: number } }
   children?: LspDocumentSymbol[]
   deprecated?: boolean
 }

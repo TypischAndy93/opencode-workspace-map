@@ -6,14 +6,34 @@ import { createWriteStream } from "node:fs"
 import * as path from "node:path"
 import { VERSION } from "../version.ts"
 
+interface SymbolLocation {
+  rel: string
+  name: string
+  kind?: string
+  line?: number
+  character?: number
+}
+
+function buildSymbolIndex(cache: Map<string, FileEntry>): Map<string, SymbolLocation[]> {
+  const index = new Map<string, SymbolLocation[]>()
+  for (const [rel, entry] of cache) {
+    for (const sym of entry.symbols ?? []) {
+      const locs = index.get(sym.name) ?? []
+      locs.push({ rel, name: sym.name, kind: sym.kind, line: sym.line, character: sym.character })
+      index.set(sym.name, locs)
+    }
+  }
+  return index
+}
+
 export function createWorkspaceMapTool(pluginCtx: PluginContext) {
   const { api, opts, root, locKey, cache, reverseDeps, stats, recentBySession, recentGlobal, listFiles, getChangedFilesCached, summarizeMany, project } = pluginCtx
   return {
     name: TOOL_NAME,
     description:
       "Returns workspace tree + per-file summaries (outline default, zero model cost). " +
-      "Call directly as workspace_map({ path, query, refresh, limit, format, action }). " +
-      "Accepts: path (limit to dir/file), query (filter by path, summary, or symbols), limit (cap), format (map|json), refresh (re-scan), action (map|stats|export).",
+      "Call directly as workspace_map({ path, query, refresh, limit, format, action, symbol }). " +
+      "Accepts: path (limit to dir/file), query (filter by path, summary, or symbols), limit (cap), format (map|json), refresh (re-scan), action (map|stats|export|graph|packages|symbols|definition|references), symbol (symbol name for definition/references actions).",
     options: { codemode: false },
     input: {
       type: "object",
@@ -23,7 +43,8 @@ export function createWorkspaceMapTool(pluginCtx: PluginContext) {
         refresh: { type: "boolean", description: "Force a fresh filesystem scan and re-summarize the matching files." },
         limit: { type: "number", description: "Cap the number of matching files returned (and summarized on refresh)." },
         format: { type: "string", enum: ["map", "json"], description: "Return the rendered map (default) or raw JSON." },
-        action: { type: "string", enum: ["map", "stats", "export", "graph", "packages"], description: "Return the map (default), plugin statistics, export JSONL, dependency graph, or monorepo packages." },
+        action: { type: "string", enum: ["map", "stats", "export", "graph", "packages", "symbols", "definition", "references"], description: "Return the map (default), plugin statistics, export JSONL, dependency graph, monorepo packages, symbol list, symbol definition, or symbol references." },
+        symbol: { type: "string", description: "Symbol name to look up (used with action: definition or references)." },
       },
       additionalProperties: false,
     },
@@ -53,6 +74,92 @@ export function createWorkspaceMapTool(pluginCtx: PluginContext) {
             ),
           }
         }
+
+        // ---- Symbol Navigation Actions ----
+
+        if (input?.action === "symbols") {
+          const index = buildSymbolIndex(cache)
+          const query = typeof input?.query === "string" ? input.query.toLowerCase() : undefined
+          const results: SymbolLocation[] = []
+          for (const [name, locs] of index) {
+            if (query && !name.toLowerCase().includes(query)) continue
+            for (const loc of locs) results.push(loc)
+          }
+          results.sort((a, b) => a.name.localeCompare(b.name))
+          const limit = typeof input?.limit === "number" && input.limit > 0 ? Math.floor(input.limit) : undefined
+          const capped = limit ? results.slice(0, limit) : results
+          return {
+            content: JSON.stringify(
+              { version: VERSION, action: "symbols", query, total: results.length, symbols: capped.map(r => ({ file: r.rel, name: r.name, kind: r.kind })) },
+              null, 2,
+            ),
+          }
+        }
+
+        if (input?.action === "definition") {
+          const symbolName = input?.symbol
+          if (!symbolName) {
+            return { content: "definition action requires a 'symbol' parameter", isError: true }
+          }
+          const index = buildSymbolIndex(cache)
+          const locs = index.get(symbolName)
+          if (!locs || locs.length === 0) {
+            return { content: JSON.stringify({ version: VERSION, action: "definition", symbol: symbolName, found: false, message: "Symbol not found in workspace index" }, null, 2) }
+          }
+          // Return the first definition location (LSP would give line/character; outline gives file only)
+          const def = locs[0]
+          return {
+            content: JSON.stringify(
+              { version: VERSION, action: "definition", symbol: symbolName, found: true, file: def.rel, line: def.line, character: def.character, kind: def.kind, note: "line/character require LSP summarizer; outline mode provides file only" },
+              null, 2,
+            ),
+          }
+        }
+
+        if (input?.action === "references") {
+          const symbolName = input?.symbol
+          if (!symbolName) {
+            return { content: "references action requires a 'symbol' parameter", isError: true }
+          }
+          const index = buildSymbolIndex(cache)
+          const defLocs = index.get(symbolName)
+          if (!defLocs || defLocs.length === 0) {
+            return { content: JSON.stringify({ version: VERSION, action: "references", symbol: symbolName, found: false, message: "Symbol not found in workspace index" }, null, 2) }
+          }
+          // Find files that import/define the symbol using reverseDeps + symbol index
+          const refFiles = new Set<string>()
+          for (const loc of defLocs) {
+            // Files that import this symbol's file (reverseDeps keyed by import path)
+            const importers = reverseDeps.get(loc.rel)
+            if (importers) for (const f of importers) refFiles.add(f)
+            // Best-effort: match import path to defining file by basename (e.g. "./user" -> "src/user.ts")
+            const locBase = path.basename(loc.rel, path.extname(loc.rel))
+            for (const [imp, importers] of reverseDeps) {
+              const impBase = imp.replace(/^\.\//, "").replace(/^\.\.\//, "")
+              if (locBase.endsWith(impBase) || impBase.endsWith(locBase)) {
+                for (const f of importers) refFiles.add(f)
+              }
+            }
+            // The defining file itself
+            refFiles.add(loc.rel)
+          }
+          // Also match by symbol name appearing in other files' symbols
+          for (const [name, locs] of index) {
+            if (name === symbolName) continue
+            // Fuzzy: symbol name contains the query symbol (e.g., "UserService" contains "User")
+            if (name.includes(symbolName) || symbolName.includes(name)) {
+              for (const loc of locs) refFiles.add(loc.rel)
+            }
+          }
+          const results = [...refFiles].sort().map(rel => ({ file: rel }))
+          return {
+            content: JSON.stringify(
+              { version: VERSION, action: "references", symbol: symbolName, total: results.length, references: results },
+              null, 2,
+            ),
+          }
+        }
+
         const force = input?.refresh === true
         const files = await listFiles(force)
         let matched = files

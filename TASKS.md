@@ -90,9 +90,9 @@
 - [x] Watch mode file changes
 
 ### 13. Symbol Navigation
-- [ ] `action: "symbols"` - list all symbols matching query
-- [ ] `action: "definition"` - find definition (requires LSP)
-- [ ] `action: "references"` - find references (requires LSP)
+- [x] `action: "symbols"` - list all symbols matching query
+- [x] `action: "definition"` - find definition (requires LSP)
+- [x] `action: "references"` - find references (requires LSP)
 
 ### 14. Dependency Graph Enhancements
 - [ ] Circular dependency detection

@@ -13,6 +13,8 @@ export interface SymbolRule {
 export interface SymbolInfo {
   name: string
   kind?: "function" | "class" | "interface" | "type" | "enum" | "const" | "var" | "method" | "property" | "namespace" | "module"
+  line?: number
+  character?: number
 }
 
 export interface SummarySections {
@@ -236,7 +238,8 @@ export interface WorkspaceMapInput {
   refresh?: boolean
   limit?: number
   format?: "map" | "json"
-  action?: "map" | "stats" | "export" | "graph" | "packages"
+  action?: "map" | "stats" | "export" | "graph" | "packages" | "symbols" | "definition" | "references"
+  symbol?: string
 }
 
 export const DEFAULT_IGNORES = [
